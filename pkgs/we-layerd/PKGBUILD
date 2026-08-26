@@ -20,6 +20,9 @@ depends=(
     'gstreamer'
     'gst-plugins-base-libs'
     'gst-libav'
+    # 视频壁纸需要完整插件集（qtdemux 等解封装器）
+    'gst-plugins-base'
+    'gst-plugins-good'
     'lz4'
     'pango'
     'fontconfig'
@@ -28,6 +31,8 @@ depends=(
     # 运行时必需：renderer 链接受 libdxcompiler.so，web helper 受 libcef.so
     'cef'
     'directx-shader-compiler'
+    # we-gui 系统托盘图标
+    'libayatana-appindicator'
 )
 makedepends=(
     'git'
