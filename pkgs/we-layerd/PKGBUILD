@@ -25,6 +25,9 @@ depends=(
     'fontconfig'
     'freetype2'
     'xdotool'
+    # 运行时必需：renderer 链接受 libdxcompiler.so，web helper 受 libcef.so
+    'cef'
+    'directx-shader-compiler'
 )
 makedepends=(
     'git'
@@ -35,8 +38,6 @@ makedepends=(
     'gstreamer'
     'gst-plugins-bad-libs'
     'gst-plugins-good'
-    'directx-shader-compiler'
-    'cef'
 )
 provides=("we-layerd")
 conflicts=("we-layerd")
