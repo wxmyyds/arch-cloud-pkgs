@@ -1,0 +1,60 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# 云端构建版 we-layerd：锁定上游 tag，完整功能（scene/video/web）
+# 升级方法：改 pkgver 为上游新版本号，然后 sha256sums 保持 SKIP（git tag 源）
+
+pkgname=we-layerd
+pkgver=0.2.7
+pkgrel=1
+pkgdesc="A native Wallpaper Engine runtime for Linux Wayland (niri/Hyprland/KDE/GNOME)"
+arch=('x86_64')
+url="https://github.com/Aromatic05/we-layerd"
+license=('MIT')
+depends=(
+    'gtk3'
+    'wayland'
+    'libxkbcommon'
+    'vulkan-icd-loader'
+    'libglvnd'
+    'mesa'
+    'gstreamer'
+    'gst-plugins-base-libs'
+    'gst-libav'
+    'lz4'
+    'pango'
+    'fontconfig'
+    'freetype2'
+    'xdotool'
+)
+makedepends=(
+    'git'
+    'rust'
+    'cmake'
+    'wayland-protocols'
+    'vulkan-headers'
+    'gstreamer'
+    'gst-plugins-bad-libs'
+    'gst-plugins-good'
+    'directx-shader-compiler'
+    'cef'
+)
+provides=("we-layerd")
+conflicts=("we-layerd")
+source=("$_pkgname::git+https://github.com/Aromatic05/we-layerd.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "$_pkgname"
+    # 上游要求初始化 renderer 子模块（AUR 坑包就是漏了这步）
+    git submodule update --init --recursive
+}
+
+build() {
+    cd "$_pkgname"
+    export CARGO_TARGET_DIR="$srcdir/$_pkgname/target"
+    cargo build --locked --release --workspace
+}
+
+package() {
+    cd "$_pkgname"
+    DESTDIR="$pkgdir" cargo xtask install --prefix /usr
+}
