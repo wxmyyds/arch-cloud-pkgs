@@ -2,7 +2,8 @@
 # 云端构建版 we-layerd：锁定上游 tag，完整功能（scene/video/web）
 # 升级方法：改 pkgver 为上游新版本号，然后 sha256sums 保持 SKIP（git tag 源）
 
-pkgname=we-layerd
+_pkgname=we-layerd
+pkgname=$_pkgname
 pkgver=0.2.7
 pkgrel=1
 pkgdesc="A native Wallpaper Engine runtime for Linux Wayland (niri/Hyprland/KDE/GNOME)"
