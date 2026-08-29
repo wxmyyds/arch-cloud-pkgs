@@ -33,6 +33,11 @@ jobs:
             echo "::group::构建 $pkg"
             chown -R builder:builder "$d"
             (cd "$d" && sudo -u builder makepkg -sf --noconfirm)
+            # 产物改用 .pacman 扩展名（与 fpm/tauri/electron-builder 约定一致），
+            # 本质仍为标准 pacman 包，pacman -U 可直接安装
+            for f in "$d"/*.pkg.tar.zst; do
+              [ -f "$f" ] && mv "$f" "${f%.pkg.tar.zst}.pacman"
+            done
             echo "::endgroup::"
           done
 
@@ -40,6 +45,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: arch-packages
-          path: pkgs/*/*.pkg.tar.zst
+          path: pkgs/*/*.pacman
           retention-days: 30
           if-no-files-found: error

@@ -18,7 +18,7 @@
 
 ### 本地安装
 ```bash
-sudo pacman -U we-layerd-*.pkg.tar.zst
+sudo pacman -U *.pacman
 ```
 
 ### 升级某个包
