@@ -7,7 +7,7 @@
 | 包名 | 上游 | 说明 |
 |------|------|------|
 | [we-layerd](https://github.com/Aromatic05/we-layerd) | v0.2.7 | 原生 Wallpaper Engine 运行时（scene/video/web，支持 niri）|
-| [xplorer](https://github.com/kimlimjustin/xplorer) | v1.0.0-alpha.1 | 现代文件管理器（Tauri 2 + React，AI/Git/终端集成，从上游 deb 重打包）|
+| [spacedrive](https://github.com/spacedriveapp/spacedrive) | v2.0.0-alpha.2 (预发布) | 跨平台通用文件管理器（Tauri 2 + VDFS 虚拟分布式文件系统，从上游 deb 重打包）|
 
 ## 使用方法
 

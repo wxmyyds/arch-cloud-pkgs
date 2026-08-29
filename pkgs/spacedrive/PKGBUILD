@@ -1,0 +1,51 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# 云端构建版 spacedrive：从上游 Tauri 2 预编译 deb 重打包为 pacman 包
+# 选 v2.0.0-alpha.2（预发布）而非稳定版 0.4.3：用户指定使用预发布版
+# 升级方法：改 _tag 为上游新 release tag，同步更新 sha256sums
+
+pkgname=spacedrive
+pkgver=2.0.0.alpha.2
+pkgrel=1
+_tag=v2.0.0-alpha.2
+pkgdesc="A cross-platform universal file explorer powered by a virtual distributed filesystem (VDFS)"
+arch=('x86_64')
+url="https://github.com/spacedriveapp/spacedrive"
+license=('AGPL-3.0-only')
+# 运行时动态库 NEEDED（readelf -d）映射到 Arch 包：
+#   libwebkit2gtk-4.1.so.0 + libjavascriptcoregtk-4.1.so.0 -> webkit2gtk-4.1
+#   libgtk-3.so.0 / libgdk-3.so.0                          -> gtk3
+#   libsoup-3.0.so.0                                        -> libsoup3
+#   libssl.so.3 / libcrypto.so.3 (sd-daemon)                -> openssl
+# 其余（glib2/cairo/gdk-pixbuf2/gcc-libs）由上述传递依赖带入
+# 注：ffmpeg / libheif / onnxruntime / pdfium 已随 deb 打包进 /usr/lib/spacedrive，
+#     通过二进制 RUNPATH ${ORIGIN}/../lib/spacedrive 加载，无需系统包
+# 注：v2 已移除对 libxdo（xdotool）的依赖，故无需 xdotool
+depends=(
+    'webkit2gtk-4.1'
+    'gtk3'
+    'libsoup3'
+    'openssl'
+)
+provides=("spacedrive")
+conflicts=("spacedrive" "spacedrive-bin")
+source=(
+    "Spacedrive-linux-x86_64.deb::${url}/releases/download/${_tag}/Spacedrive-linux-x86_64.deb"
+    "LICENSE::https://raw.githubusercontent.com/spacedriveapp/spacedrive/${_tag}/LICENSE"
+)
+sha256sums=(
+    '2b344f06dc97e71e192e565de928004bf732ffb8ab5edeeff9bdd8baaf46113a'
+    'ae2ccc6a26abaae2e148b80e6aa7f4a29de9276b938b1ba792027ebf71b74d0a'
+)
+# 上游二进制已 strip，!debug 不再单独留 debug 包
+options=('!debug' '!emptydirs')
+
+package() {
+    cd "$srcdir"
+    # .deb 是 ar 归档：bsdtar (libarchive) 先抽出全部成员
+    # （debian-binary / control.tar.gz / data.tar.gz）
+    bsdtar -xf "Spacedrive-linux-x86_64.deb"
+    # 再把真实文件树解到 pkgdir（路径为 usr/bin/Spacedrive、usr/lib/spacedrive 等）
+    bsdtar -xf data.tar.gz -C "$pkgdir"
+    # 许可证（deb 内未随附，单独取上游 tag 的 LICENSE）
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
