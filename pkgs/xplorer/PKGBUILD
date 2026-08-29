@@ -32,7 +32,8 @@ sha256sums=(
     '384651e250b481a24c644ce77f62b638f4a10b33bb140e0e615ea2ebc98e9d6d'
     'ff834d22160669758efdc4663b4c68b52782297c30c330e56e12f501dab0a8a4'
 )
-options=('!strip' '!emptydirs')
+# strip 裁掉上游未裁的 debug_info（61MB->~20MB），!debug 不再单独留 debug 包
+options=('strip' '!debug' '!emptydirs')
 
 package() {
     cd "$srcdir"
