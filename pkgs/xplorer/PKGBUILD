@@ -1,0 +1,46 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# 云端构建版 xplorer：从上游 Tauri 2 预编译 deb 重打包为 pacman 包
+# 选 v1.0.0-alpha.1 而非 v0.3.1：旧版依赖 libssl.so.1.1（Arch 已移除 openssl-1.1）
+# 升级方法：改 _tag 为上游新 release tag，同步改 _debver 为 deb 文件名里的版本号
+
+pkgname=xplorer
+pkgver=1.0.0.alpha.1
+pkgrel=1
+_tag=v1.0.0-alpha.1
+_debver=0.99.1
+pkgdesc="A modern, AI-powered file manager built with Tauri 2 and React"
+arch=('x86_64')
+url="https://github.com/kimlimjustin/xplorer"
+license=('AGPL-3.0-only')
+# 运行时动态库 NEEDED（readelf -d）映射到 Arch 包：
+#   libwebkit2gtk-4.1.so.0 + libjavascriptcoregtk-4.1.so.0 -> webkit2gtk-4.1
+#   libgtk-3.so.0 / libgdk-3.so.0                          -> gtk3
+#   libsoup-3.0.so.0                                        -> libsoup3
+#   其余（openssl/zlib/xz/glib2/gcc-libs）由上述传递依赖带入
+depends=(
+    'webkit2gtk-4.1'
+    'gtk3'
+    'libsoup3'
+)
+provides=("xplorer")
+conflicts=("xplorer" "xplorer-bin")
+source=(
+    "Xplorer_${_debver}_amd64.deb::${url}/releases/download/${_tag}/Xplorer_${_debver}_amd64.deb"
+    "LICENSE::https://raw.githubusercontent.com/kimlimjustin/xplorer/${_tag}/LICENSE"
+)
+sha256sums=(
+    '384651e250b481a24c644ce77f62b638f4a10b33bb140e0e615ea2ebc98e9d6d'
+    'ff834d22160669758efdc4663b4c68b52782297c30c330e56e12f501dab0a8a4'
+)
+options=('!strip' '!emptydirs')
+
+package() {
+    cd "$srcdir"
+    # .deb 是 ar 归档：bsdtar (libarchive) 先抽出全部成员
+    # （debian-binary / control.tar.gz / data.tar.gz）
+    bsdtar -xf "Xplorer_${_debver}_amd64.deb"
+    # 再把真实文件树解到 pkgdir（路径为 usr/bin/xplorer 等）
+    bsdtar -xf data.tar.gz -C "$pkgdir"
+    # 许可证
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
