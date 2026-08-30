@@ -2,6 +2,11 @@ name: Build packages
 
 on:
   workflow_dispatch:
+    inputs:
+      packages:
+        description: '要构建的包，逗号分隔（如: we-layerd,spacedrive）。留空 = 全部'
+        required: false
+        type: string
   push:
     paths:
       - 'pkgs/**'
@@ -22,14 +27,62 @@ jobs:
           useradd -m builder
           echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
 
-      - name: Checkout
+      - name: Checkout（全量历史，用于 diff 找出变更包）
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: 构建所有包
+      - name: 确定要构建的包列表
+        id: select
         run: |
           set -e
-          for d in pkgs/*/; do
-            pkg=$(basename "$d")
+          select_pkgs() {
+            # 手动触发：用输入指定的包；留空则全部
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              INPUT="${{ inputs.packages }}"
+              if [ -n "$INPUT" ]; then
+                IFS=',' read -ra names <<< "$INPUT"
+                for n in "${names[@]}"; do
+                  n="$(echo "$n" | xargs)"   # 去首尾空格
+                  if [ ! -d "pkgs/$n" ]; then
+                    echo "::error::未找到包目录 pkgs/$n"
+                    exit 1
+                  fi
+                done
+                echo "$INPUT" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | paste -sd ' ' -
+              else
+                ls -d pkgs/*/ | xargs -n1 basename | paste -sd ' ' -
+              fi
+              return
+            fi
+            # push 触发：diff 出变更的包
+            BEFORE="${{ github.event.before }}"
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              # 新分支首个 push：没有可 diff 的基线，构建全部
+              ls -d pkgs/*/ | xargs -n1 basename | paste -sd ' ' -
+              return
+            fi
+            CHANGED=$(git diff --name-only "$BEFORE" HEAD -- pkgs/ | cut -d/ -f2 | sort -u | tr '\n' ' ')
+            if [ -z "$CHANGED" ]; then
+              # 只改了 workflow 等非包文件：本次无包要构建，空列表
+              echo ""
+            else
+              echo "$CHANGED"
+            fi
+          }
+          PKGS="$(select_pkgs)"
+          echo "pkgs=$PKGS" >> "$GITHUB_OUTPUT"
+          if [ -z "$PKGS" ]; then
+            echo "本次无包需要构建（仅 workflow/非包文件变更）"
+          else
+            echo "本次构建: $PKGS"
+          fi
+
+      - name: 构建选定的包
+        run: |
+          set -e
+          for pkg in ${{ steps.select.outputs.pkgs }}; do
+            d="pkgs/$pkg"
             echo "::group::构建 $pkg"
             chown -R builder:builder "$d"
             (cd "$d" && sudo -u builder makepkg -sf --noconfirm)
@@ -42,6 +95,7 @@ jobs:
           done
 
       - name: 上传构建产物
+        if: steps.select.outputs.pkgs != ''
         uses: actions/upload-artifact@v4
         with:
           name: arch-packages
