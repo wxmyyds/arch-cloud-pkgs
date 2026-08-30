@@ -13,7 +13,8 @@ arch=('x86_64')
 url="https://github.com/rafaelrc7/wayland-pipewire-idle-inhibit"
 license=('GPL-3.0-only')
 depends=('gcc-libs' 'glibc' 'libpipewire')
-makedepends=('cargo' 'clang' 'wayland' 'wayland-protocols')
+# rust 提供 cargo+rustc（Arch 仓库已无独立 cargo 包，用 cargo 会让 makepkg 找不到依赖）
+makedepends=('rust' 'clang' 'wayland' 'wayland-protocols')
 provides=("${_pkgname}")
 conflicts=("${_pkgname}")
 source=("${_pkgname}-${pkgver}.tar.gz::https://github.com/rafaelrc7/${_pkgname}/archive/refs/tags/v${pkgver}.tar.gz")
@@ -26,13 +27,11 @@ options=('!debug' '!emptydirs')
 
 prepare() {
     cd "$_pkgname-$pkgver"
-    export RUSTUP_TOOLCHAIN=stable
     cargo fetch --locked --target "$(rustc --print host-tuple)"
 }
 
 build() {
     cd "$_pkgname-$pkgver"
-    export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
     cargo build --frozen --release
 }

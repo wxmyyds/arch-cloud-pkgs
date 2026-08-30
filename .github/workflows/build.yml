@@ -12,46 +12,35 @@ on:
       - 'pkgs/**'
       - '.github/workflows/build.yml'
 
+# 同一分支的新提交会取消仍在跑的旧构建，避免重复占用 runner
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  # 选包 job：跑在裸 ubuntu 上（不进 arch 容器），只算"本次要构建哪些包"，
+  # 输出 JSON 数组给 build 的 matrix 用；空数组时 build 直接跳过
+  select:
     runs-on: ubuntu-latest
-    container:
-      image: archlinux:base-devel
+    outputs:
+      pkgs: ${{ steps.select.outputs.json }}
     steps:
-      - name: 安装基础工具
-        run: |
-          pacman -Syu --noconfirm git sudo
-
-      - name: 创建构建用户（makepkg 拒绝 root）
-        run: |
-          useradd -m builder
-          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
-
-      - name: Checkout（全量历史，用于 diff 找出变更包）
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # 需要历史才能 diff 出变更的包
 
       - name: 确定要构建的包列表
         id: select
         run: |
-          set -e
+          set -euo pipefail
           select_pkgs() {
             # 手动触发：用输入指定的包；留空则全部
             if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
               INPUT="${{ inputs.packages }}"
               if [ -n "$INPUT" ]; then
-                IFS=',' read -ra names <<< "$INPUT"
-                for n in "${names[@]}"; do
-                  n="$(echo "$n" | xargs)"   # 去首尾空格
-                  if [ ! -d "pkgs/$n" ]; then
-                    echo "::error::未找到包目录 pkgs/$n"
-                    exit 1
-                  fi
-                done
-                echo "$INPUT" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | paste -sd ' ' -
+                echo "$INPUT" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
               else
-                ls -d pkgs/*/ | xargs -n1 basename | paste -sd ' ' -
+                ls -d pkgs/*/ | xargs -n1 basename
               fi
               return
             fi
@@ -59,46 +48,104 @@ jobs:
             BEFORE="${{ github.event.before }}"
             if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
               # 新分支首个 push：没有可 diff 的基线，构建全部
-              ls -d pkgs/*/ | xargs -n1 basename | paste -sd ' ' -
+              ls -d pkgs/*/ | xargs -n1 basename
               return
             fi
-            CHANGED=$(git diff --name-only "$BEFORE" HEAD -- pkgs/ | cut -d/ -f2 | sort -u | tr '\n' ' ')
-            if [ -z "$CHANGED" ]; then
-              # 只改了 workflow 等非包文件：本次无包要构建，空列表
-              echo ""
-            else
-              echo "$CHANGED"
-            fi
+            git diff --name-only "$BEFORE" HEAD -- pkgs/ | cut -d/ -f2 | sort -u
           }
-          PKGS="$(select_pkgs)"
-          echo "pkgs=$PKGS" >> "$GITHUB_OUTPUT"
-          if [ -z "$PKGS" ]; then
+          mapfile -t names < <(select_pkgs)
+          # 校验包目录存在（手动输入的包名可能拼错）
+          for n in "${names[@]}"; do
+            if [ ! -d "pkgs/$n" ]; then
+              echo "::error::未找到包目录 pkgs/$n"
+              exit 1
+            fi
+          done
+          if [ ${#names[@]} -eq 0 ]; then
+            echo "json=[]" >> "$GITHUB_OUTPUT"
             echo "本次无包需要构建（仅 workflow/非包文件变更）"
           else
-            echo "本次构建: $PKGS"
+            echo "json=$(printf '%s\n' "${names[@]}" | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+            echo "本次构建: ${names[*]}"
           fi
 
-      - name: 构建选定的包
+  # matrix：每个包一个独立 job 并行构建，互不干扰，单包失败不影响其他包
+  build:
+    needs: select
+    if: needs.select.outputs.pkgs != '[]'
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg: ${{ fromJSON(needs.select.outputs.pkgs) }}
+    steps:
+      - name: 安装基础工具
+        run: pacman -Syu --noconfirm git sudo
+
+      - name: 创建构建用户（makepkg 拒绝 root）
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1  # 选包已在 select job 完成，这里浅克隆即可
+
+      # 缓存 cargo registry/git + 上次构建的 src/（含 cargo target 目录）。
+      # 命中时同版本重建 = 增量编译，从 15~30 分钟降到几分钟；
+      # 键含 PKGBUILD 哈希，升级 pkgver 等任何改动会自动失效（全量重编一次）。
+      # 缓存故障（超过 10GB 配额、网络等）不阻断构建。
+      - name: 恢复构建缓存
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: |
+            /home/builder/.cargo/registry
+            /home/builder/.cargo/git
+            pkgs/${{ matrix.pkg }}/src
+          key: build-${{ matrix.pkg }}-${{ hashFiles(format('pkgs/{0}/PKGBUILD', matrix.pkg)) }}
+          restore-keys: |
+            build-${{ matrix.pkg }}-
+
+      - name: 构建 ${{ matrix.pkg }}
         run: |
           set -e
-          for pkg in ${{ steps.select.outputs.pkgs }}; do
-            d="pkgs/$pkg"
-            echo "::group::构建 $pkg"
-            chown -R builder:builder "$d"
-            (cd "$d" && sudo -u builder makepkg -sf --noconfirm)
-            # 产物改用 .pacman 扩展名（与 fpm/tauri/electron-builder 约定一致），
-            # 本质仍为标准 pacman 包，pacman -U 可直接安装
-            for f in "$d"/*.pkg.tar.zst; do
-              [ -f "$f" ] && mv "$f" "${f%.pkg.tar.zst}.pacman"
-            done
-            echo "::endgroup::"
+          d="pkgs/${{ matrix.pkg }}"
+          # 缓存以 root 恢复，先归还给 builder（读写都需要）
+          chown -R builder:builder "$d" /home/builder/.cargo 2>/dev/null || true
+          echo "::group::构建 ${{ matrix.pkg }}"
+          (cd "$d" && sudo -u builder makepkg -sf --noconfirm)
+          # 产物改用 .pacman 扩展名（与 fpm/tauri/electron-builder 约定一致），
+          # 本质仍为标准 pacman 包，pacman -U 可直接安装
+          for f in "$d"/*.pkg.tar.zst; do
+            [ -f "$f" ] && mv "$f" "${f%.pkg.tar.zst}.pacman"
           done
+          echo "::endgroup::"
 
-      - name: 上传构建产物
-        if: steps.select.outputs.pkgs != ''
+      - name: 上传单包产物
         uses: actions/upload-artifact@v4
         with:
-          name: arch-packages
-          path: pkgs/*/*.pacman
+          name: arch-packages-${{ matrix.pkg }}
+          path: pkgs/${{ matrix.pkg }}/*.pacman
           retention-days: 30
           if-no-files-found: error
+
+  # 把所有单包产物合并成一个 arch-packages，保持原有下载习惯；
+  # 任一包失败时跳过合并（成功的包仍可从 arch-packages-<包名> 下载）
+  merge:
+    needs: build
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: arch-packages-*
+          merge-multiple: true
+          path: merged
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-packages
+          path: merged
+          retention-days: 30

@@ -5,7 +5,7 @@
 _pkgname=we-layerd
 pkgname=$_pkgname
 pkgver=0.2.7
-pkgrel=1
+pkgrel=2
 pkgdesc="A native Wallpaper Engine runtime for Linux Wayland (niri/Hyprland/KDE/GNOME)"
 arch=('x86_64')
 url="https://github.com/Aromatic05/we-layerd"
@@ -38,6 +38,7 @@ makedepends=(
     'git'
     'rust'
     'cmake'
+    'pkgconf'
     'wayland-protocols'
     'vulkan-headers'
     'gstreamer'
@@ -48,6 +49,10 @@ provides=("we-layerd")
 conflicts=("we-layerd")
 source=("$_pkgname::git+https://github.com/Aromatic05/we-layerd.git#tag=v$pkgver")
 sha256sums=('SKIP')
+
+# 关闭 debug 包 + 显式 strip：Rust release 二进制自带完整 debug 符号，
+# 不处理的话 makepkg 会额外产出几十 MB 的 -debug 包，主包也偏大
+options=('!debug' '!emptydirs')
 
 prepare() {
     cd "$_pkgname"
@@ -64,4 +69,10 @@ build() {
 package() {
     cd "$_pkgname"
     DESTDIR="$pkgdir" cargo xtask install --prefix /usr
+    # 显式 strip 所有可执行文件/共享库（renderer 是 dlopen 的 .so，strip 不影响加载）
+    find "$pkgdir" -type f \( -perm -111 -o -name '*.so*' \) -print0 | while IFS= read -r -d '' f; do
+        strip --strip-unneeded "$f" 2>/dev/null || true
+    done
+    # 打印 strip 后体积便于日志确认
+    ls -lh "$pkgdir/usr/bin/" "$pkgdir/usr/lib/" 2>/dev/null || true
 }

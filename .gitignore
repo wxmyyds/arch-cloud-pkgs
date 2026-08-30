@@ -1,5 +1,6 @@
 *.pkg.tar.zst
 *.pkg.tar.xz
+*.pacman
 src/
 pkg/
 target/
