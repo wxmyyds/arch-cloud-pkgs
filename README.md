@@ -7,7 +7,6 @@
 | 包名 | 上游 | 说明 |
 |------|------|------|
 | [we-layerd](https://github.com/Aromatic05/we-layerd) | v0.2.7 | 原生 Wallpaper Engine 运行时（scene/video/web，支持 niri）|
-| [spacedrive](https://github.com/spacedriveapp/spacedrive) | v2.0.0-alpha.2 (预发布) | 跨平台通用文件管理器（Tauri 2 + VDFS 虚拟分布式文件系统，从上游 deb 重打包）|
 | [wayland-pipewire-idle-inhibit-aur](https://github.com/rafaelrc7/wayland-pipewire-idle-inhibit) | v0.7.1 | 播放声音时抑制 Wayland idle（包名带 `-aur` 后缀以避免产物匹配问题，`provides` 原包名）|
 
 ## 使用方法

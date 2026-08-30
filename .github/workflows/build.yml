@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       packages:
-        description: '要构建的包，逗号分隔（如: we-layerd,spacedrive）。留空 = 全部'
+        description: '要构建的包，逗号分隔（如: we-layerd,wayland-pipewire-idle-inhibit-aur）。留空 = 全部'
         required: false
         type: string
   push:
