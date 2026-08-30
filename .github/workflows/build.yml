@@ -44,14 +44,19 @@ jobs:
               fi
               return
             fi
-            # push 触发：diff 出变更的包
+            # push 触发：diff 出变更的包，但只保留目录仍存在的
+            # （删除的包没有可构建的东西，跳过而不是报错）
             BEFORE="${{ github.event.before }}"
             if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
               # 新分支首个 push：没有可 diff 的基线，构建全部
               ls -d pkgs/*/ | xargs -n1 basename
               return
             fi
-            git diff --name-only "$BEFORE" HEAD -- pkgs/ | cut -d/ -f2 | sort -u
+            git diff --name-only "$BEFORE" HEAD -- pkgs/ | cut -d/ -f2 | sort -u | while IFS= read -r n; do
+              if [ -d "pkgs/$n" ]; then
+                echo "$n"
+              fi
+            done
           }
           mapfile -t names < <(select_pkgs)
           # 校验包目录存在（手动输入的包名可能拼错）
