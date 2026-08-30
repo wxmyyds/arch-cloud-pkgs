@@ -1,0 +1,40 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# 云端构建版 wayland-pipewire-idle-inhibit：锁定上游 tag，本机零编译
+# 升级方法：改 pkgver 为上游新版本号，sha256sums 保持 SKIP（git tag 源）
+# 注意：包名带 -aur 后缀以避免工作流 *.pkg.tar.zst 产物循环匹配；
+#       运行时包名/二进制不变（provides 原名）
+
+_pkgname=wayland-pipewire-idle-inhibit
+pkgname=${_pkgname}-aur
+pkgver=0.7.1
+pkgrel=1
+pkgdesc="Inhibit wayland idle when computer is playing sound"
+arch=('x86_64')
+url="https://github.com/rafaelrc7/wayland-pipewire-idle-inhibit"
+license=('GPL-3.0-only')
+depends=('gcc-libs' 'glibc' 'libpipewire')
+makedepends=('cargo' 'clang' 'wayland' 'wayland-protocols')
+provides=("${_pkgname}")
+conflicts=("${_pkgname}")
+source=("${_pkgname}-${pkgver}.tar.gz::https://github.com/rafaelrc7/${_pkgname}/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "$_pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+    cd "$_pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release
+}
+
+package() {
+    cd "$_pkgname-$pkgver"
+    install -Dm0755 -t "$pkgdir/usr/bin/" "target/release/$_pkgname"
+    install -Dm0644 -t "$pkgdir/usr/share/licenses/$pkgname/" LICENCE
+    install -Dm0644 -t "$pkgdir/usr/lib/systemd/user/" wayland-pipewire-idle-inhibit.service
+}
