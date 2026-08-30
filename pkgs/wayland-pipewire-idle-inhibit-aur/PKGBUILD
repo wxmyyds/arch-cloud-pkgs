@@ -19,6 +19,11 @@ conflicts=("${_pkgname}")
 source=("${_pkgname}-${pkgver}.tar.gz::https://github.com/rafaelrc7/${_pkgname}/archive/refs/tags/v${pkgver}.tar.gz")
 sha256sums=('SKIP')
 
+# 关键：关闭 debug 包生成（否则 makepkg 自动产出 -debug 包）
+# + cargo release 二进制默认带完整 debug 符号（~700MB），
+#   package() 里必须显式 strip，否则主包也会巨大
+options=('!debug' '!emptydirs')
+
 prepare() {
     cd "$_pkgname-$pkgver"
     export RUSTUP_TOOLCHAIN=stable
@@ -37,4 +42,9 @@ package() {
     install -Dm0755 -t "$pkgdir/usr/bin/" "target/release/$_pkgname"
     install -Dm0644 -t "$pkgdir/usr/share/licenses/$pkgname/" LICENCE
     install -Dm0644 -t "$pkgdir/usr/lib/systemd/user/" wayland-pipewire-idle-inhibit.service
+    # Rust release 二进制带完整 debug 符号，必须 strip 才能瘦身到正常大小
+    # --strip-unneeded 比 --strip-debug 更彻底（去掉 .debug + 局部符号）
+    strip --strip-unneeded "$pkgdir/usr/bin/$_pkgname"
+    # 打印 strip 后大小便于日志确认
+    ls -lh "$pkgdir/usr/bin/$_pkgname"
 }
