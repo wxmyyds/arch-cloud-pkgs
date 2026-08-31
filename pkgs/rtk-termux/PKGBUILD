@@ -19,6 +19,14 @@ options=('!debug' '!strip' '!emptydirs')
 
 build() {
   cd "rtk-$pkgver"
+  # makepkg 的 CFLAGS 含 -march=x86-64，会泄漏到 aarch64 交叉编译导致 clang 报错，需清空
+  export CFLAGS=""
+  export CXXFLAGS=""
+  export LDFLAGS=""
+  export CPPFLAGS=""
+  # 确保 NDK 在 PATH（workflow 已设 GITHUB_ENV，这里兜底）
+  export PATH="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+  export ANDROID_NDK_HOME="/opt/android-ndk"
   # Termux 的 triple 是 aarch64-linux-android，API 28 兼容 Android 9+
   # cargo-ndk 会调用 NDK 的 aarch64-linux-android34-clang
   # 优先用 cargo-ndk，fallback 用 cargo + NDK clang
