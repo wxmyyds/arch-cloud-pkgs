@@ -18,8 +18,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 选包 job：跑在裸 ubuntu 上（不进 arch 容器），只算"本次要构建哪些包"，
-  # 输出 JSON 数组给 build 的 matrix 用；空数组时 build 直接跳过
+  # ---- 选包 job：跑在裸 ubuntu 上（不进 arch 容器），只算"本次要构建哪些包"，
+  #      输出 JSON 数组给 build 的 matrix 用；空数组时 build 直接跳过
   select:
     runs-on: ubuntu-latest
     outputs:
@@ -40,7 +40,7 @@ jobs:
               if [ -n "$INPUT" ]; then
                 echo "$INPUT" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
               else
-                ls -d pkgs/*/ | xargs -n1 basename
+                ls -d pkgs/*/ 2>/dev/null | xargs -n1 basename
               fi
               return
             fi
@@ -49,7 +49,7 @@ jobs:
             BEFORE="${{ github.event.before }}"
             if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
               # 新分支首个 push：没有可 diff 的基线，构建全部
-              ls -d pkgs/*/ | xargs -n1 basename
+              ls -d pkgs/*/ 2>/dev/null | xargs -n1 basename
               return
             fi
             git diff --name-only "$BEFORE" HEAD -- pkgs/ | cut -d/ -f2 | sort -u | while IFS= read -r n; do
@@ -74,7 +74,7 @@ jobs:
             echo "本次构建: ${names[*]}"
           fi
 
-  # matrix：每个包一个独立 job 并行构建，互不干扰，单包失败不影响其他包
+  # ---- build job：每个包一个独立 job 并行构建，互不干扰，单包失败不影响其他包
   build:
     needs: select
     if: needs.select.outputs.pkgs != '[]'
@@ -95,81 +95,38 @@ jobs:
         with:
           fetch-depth: 1  # 选包已在 select job 完成，这里浅克隆即可
 
-      # 同步数据库（makepkg -s 需要 core/extra DB，否则报 database file does not exist）
+      # -Syu 而非 -Sy：避免数据库与已装包版本脱节的 partial-upgrade 隐患
+      # （makepkg -s 需要最新 DB）
       - name: 同步 pacman 数据库
-        run: pacman -Sy --noconfirm
+        run: pacman -Syu --needed --noconfirm
 
-      # 工具链声明式配置：各包目录下 build.conf 声明构建需求，工作流通用解析
-      # 无 build.conf 的包仅按 PKGBUILD makedepends 自动安装
-      - name: 准备额外工具链（按包声明，通用）
+      # 读取包声明（build.conf），供缓存 key / 上传路径使用
+      - name: 读取构建声明 build.conf
+        id: conf
         run: |
-          set -e
+          set -euo pipefail
           CONF="pkgs/${{ matrix.pkg }}/build.conf"
-          if [ ! -f "$CONF" ]; then
-            echo "包 ${{ matrix.pkg }} 无 build.conf，按 PKGBUILD makedepends 自动安装"
-            exit 0
+          if [ -f "$CONF" ]; then
+            set -a; source "$CONF"; set +a
           fi
-          echo "发现 $CONF，解析声明式配置"
-          cat "$CONF"
-          # 加载配置（key=value）
-          set -a; source "$CONF"; set +a
-          # 1. 额外 pacman 依赖
-          if [ -n "${extra_pacman_deps:-}" ]; then
-            echo "安装 extra_pacman_deps: $extra_pacman_deps"
-            pacman -S --needed --noconfirm $extra_pacman_deps 2>&1 || true
-          fi
-          # 2. Android NDK
-          if [ "${needs_ndk:-}" = "true" ]; then
-            VER="${ndk_version:-r26d}"
-            if ! pacman -Qi android-ndk >/dev/null 2>&1 && [ ! -d "/opt/android-ndk" ]; then
-              echo "安装 android-ndk $VER (约 1.2GB)"
-              pacman -S --noconfirm android-ndk 2>&1 && echo "pacman 装 android-ndk 成功" || {
-                echo "pacman 无 android-ndk，走官方 zip 直装"
-                curl -fsSL "https://dl.google.com/android/repository/android-ndk-${VER}-linux.zip" -o /tmp/ndk.zip
-                mkdir -p /opt && unzip -q /tmp/ndk.zip -d /opt
-                mv "/opt/android-ndk-${VER}" /opt/android-ndk
-                # NDK 的 clang 包装器依赖同目录的 clang，需加入 PATH 而非 ln -sf
-                echo "export ANDROID_NDK_HOME=/opt/android-ndk" >> /etc/profile.d/ndk.sh
-                echo "export PATH=/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin:\$PATH" >> /etc/profile.d/ndk.sh
-                export PATH="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-                export ANDROID_NDK_HOME="/opt/android-ndk"
-                echo "ANDROID_NDK_HOME=/opt/android-ndk" >> "$GITHUB_ENV"
-                echo "PATH=/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> "$GITHUB_ENV"
-                rm /tmp/ndk.zip
-              }
-            fi
-            chown -R builder:builder /opt/android-ndk 2>/dev/null || true
-            # 确保后续步骤也能找到 NDK
-            if [ -d "/opt/android-ndk" ]; then
-              echo "ANDROID_NDK_HOME=/opt/android-ndk" >> "$GITHUB_ENV"
-              echo "PATH=/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> "$GITHUB_ENV"
-            fi
-          fi
-          # 3. rustup targets
-          if [ -n "${rust_targets:-}" ]; then
-            pacman -S --needed --noconfirm rustup 2>&1 || true
-            rustup toolchain install stable --profile minimal 2>&1 || true
-            rustup default stable 2>&1 || true
-            sudo -u builder bash -c 'rustup toolchain install stable --profile minimal 2>&1 || true; rustup default stable 2>&1 || true' || true
-            for t in $rust_targets; do
-              echo "添加 rust target: $t"
-              rustup target add "$t" 2>&1 || true
-              sudo -u builder rustup target add "$t" 2>&1 || true
-            done
-          fi
-          # 4. cargo-ndk
-          if [ "${needs_cargo_ndk:-}" = "true" ]; then
-            if ! command -v cargo-ndk >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo-ndk" ] && [ ! -x "/home/builder/.cargo/bin/cargo-ndk" ]; then
-              echo "安装 cargo-ndk"
-              cargo install cargo-ndk --locked 2>&1 || sudo -u builder bash -c 'cargo install cargo-ndk --locked' 2>&1 || true
-            fi
-            cargo ndk --version 2>&1 || ~/.cargo/bin/cargo-ndk --version 2>&1 || /home/builder/.cargo/bin/cargo-ndk --version 2>&1 || true
-          fi
+          echo "needs_ndk=${needs_ndk:-false}" >> "$GITHUB_OUTPUT"
+          echo "ndk_version=${ndk_version:-r26d}" >> "$GITHUB_OUTPUT"
+          echo "extra_artifacts=${extra_artifacts:-}" >> "$GITHUB_OUTPUT"
 
-      # 缓存 cargo registry/git + 上次构建的 src/（含 cargo target 目录）。
+      # NDK 缓存：解压后的 ~3GB 目录跨包/跨构建复用，省去每次 1.2GB 下载 + 解压。
+      # 同一 NDK 版本全局只存一份；缓存故障（配额/网络）不阻断构建。
+      - name: 恢复 NDK 缓存
+        if: steps.conf.outputs.needs_ndk == 'true'
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: /opt/android-ndk
+          key: android-ndk-${{ steps.conf.outputs.ndk_version }}
+          restore-keys: android-ndk-
+
+      # cargo registry/git + 上次构建的 src/（含 cargo target 目录）。
       # 命中时同版本重建 = 增量编译，从 15~30 分钟降到几分钟；
       # 键含 PKGBUILD 哈希，升级 pkgver 等任何改动会自动失效（全量重编一次）。
-      # 缓存故障（超过 10GB 配额、网络等）不阻断构建。
       - name: 恢复构建缓存
         uses: actions/cache@v4
         continue-on-error: true
@@ -182,14 +139,17 @@ jobs:
           restore-keys: |
             build-${{ matrix.pkg }}-
 
+      # 工具链准备逻辑集中在脚本（.github/scripts/prepare-toolchain.sh），
+      # 便于本地复现/测试；声明式字段见 build.conf
+      - name: 准备工具链（按包声明，通用）
+        run: bash .github/scripts/prepare-toolchain.sh "pkgs/${{ matrix.pkg }}"
+
       - name: 构建 ${{ matrix.pkg }}
         run: |
           set -e
           d="pkgs/${{ matrix.pkg }}"
           # 缓存以 root 恢复，先归还给 builder（读写都需要）
           chown -R builder:builder "$d" /home/builder/.cargo 2>/dev/null || true
-          # 若 prepare.sh 已准备 NDK，确保 builder 可读
-          chown -R builder:builder /opt/android-ndk 2>/dev/null || true
           echo "::group::构建 ${{ matrix.pkg }}"
           (cd "$d" && sudo -u builder makepkg -sf --noconfirm)
           # 产物改用 .pacman 扩展名（与 fpm/tauri/electron-builder 约定一致），
@@ -197,6 +157,18 @@ jobs:
           for f in "$d"/*.pkg.tar.zst; do
             [ -f "$f" ] && mv "$f" "${f%.pkg.tar.zst}.pacman"
           done
+          # 收集 build.conf 声明的额外产物（如 rtk-aarch64-android）供上传
+          EXTRA="${{ steps.conf.outputs.extra_artifacts }}"
+          if [ -n "$EXTRA" ]; then
+            mkdir -p "$d/extra_artifacts"
+            for f in $EXTRA; do
+              if [ -f "$d/$f" ]; then
+                cp -f "$d/$f" "$d/extra_artifacts/"
+              else
+                echo "::warning::声明了额外产物 $f 但构建后不存在"
+              fi
+            done
+          fi
           echo "::endgroup::"
 
       - name: 上传单包产物
@@ -205,12 +177,12 @@ jobs:
           name: arch-packages-${{ matrix.pkg }}
           path: |
             pkgs/${{ matrix.pkg }}/*.pacman
-            pkgs/${{ matrix.pkg }}/rtk-aarch64-android
+            pkgs/${{ matrix.pkg }}/extra_artifacts/*
           retention-days: 30
           if-no-files-found: error
 
-  # 把所有单包产物合并成一个 arch-packages，保持原有下载习惯；
-  # 任一包失败时跳过合并（成功的包仍可从 arch-packages-<包名> 下载）
+  # ---- 合并 job：把所有单包产物合并成一个 arch-packages，保持原有下载习惯；
+  #      任一包失败时跳过合并（成功的包仍可从 arch-packages-<包名> 下载）
   merge:
     needs: build
     if: needs.build.result == 'success'
