@@ -86,9 +86,6 @@ jobs:
       matrix:
         pkg: ${{ fromJSON(needs.select.outputs.pkgs) }}
     steps:
-      - name: 安装基础工具
-        run: pacman -Syu --noconfirm git sudo
-
       - name: 创建构建用户（makepkg 拒绝 root）
         run: |
           useradd -m builder
@@ -97,6 +94,20 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1  # 选包已在 select job 完成，这里浅克隆即可
+
+      - name: 安装基础工具
+        run: pacman -Syu --noconfirm git sudo
+
+      # rtk-termux 是交叉编译到 aarch64-linux-android，需额外 NDK + cargo-ndk + rustup target
+      - name: 安装 rtk-termux 交叉工具链（仅该包需要）
+        if: matrix.pkg == 'rtk-termux'
+        run: |
+          pacman -S --noconfirm rustup android-ndk 2>&1 || echo "android-ndk 安装跳过，尝试继续"
+          rustup toolchain install stable --profile minimal || true
+          rustup default stable || true
+          rustup target add aarch64-linux-android || true
+          cargo install cargo-ndk --locked 2>&1 || sudo -u builder cargo install cargo-ndk --locked || true
+          cargo ndk --version 2>&1 || ~/.cargo/bin/cargo-ndk --version 2>&1 || true
 
       # 缓存 cargo registry/git + 上次构建的 src/（含 cargo target 目录）。
       # 命中时同版本重建 = 增量编译，从 15~30 分钟降到几分钟；
@@ -120,6 +131,10 @@ jobs:
           d="pkgs/${{ matrix.pkg }}"
           # 缓存以 root 恢复，先归还给 builder（读写都需要）
           chown -R builder:builder "$d" /home/builder/.cargo 2>/dev/null || true
+          if [ "${{ matrix.pkg }}" = "rtk-termux" ]; then
+            chown -R builder:builder /opt/android-ndk 2>/dev/null || true
+            sudo -u builder rustup target add aarch64-linux-android 2>&1 || true
+          fi
           echo "::group::构建 ${{ matrix.pkg }}"
           (cd "$d" && sudo -u builder makepkg -sf --noconfirm)
           # 产物改用 .pacman 扩展名（与 fpm/tauri/electron-builder 约定一致），
@@ -133,7 +148,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: arch-packages-${{ matrix.pkg }}
-          path: pkgs/${{ matrix.pkg }}/*.pacman
+          path: |
+            pkgs/${{ matrix.pkg }}/*.pacman
+            pkgs/${{ matrix.pkg }}/rtk-aarch64-android
           retention-days: 30
           if-no-files-found: error
 
