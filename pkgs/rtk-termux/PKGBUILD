@@ -6,7 +6,7 @@ pkgname=rtk-termux
 pkgver=0.46.0
 pkgrel=1
 pkgdesc="RTK Bionic build for Termux aarch64 (token optimizer for pi/claude/codex)"
-arch=('aarch64')
+arch=('x86_64' 'aarch64')
 url="https://github.com/rtk-ai/rtk"
 license=('Apache-2.0')
 depends=()
@@ -21,7 +21,14 @@ build() {
   cd rtk
   # Termux 的 triple 是 aarch64-linux-android，API 28 兼容 Android 9+
   # cargo-ndk 会调用 NDK 的 aarch64-linux-android34-clang
-  cargo ndk --target aarch64-linux-android --platform 28 build --release
+  # 优先用 cargo-ndk，fallback 用 cargo + NDK clang
+  if command -v cargo-ndk >/dev/null 2>&1 || [ -x "$HOME/.cargo/bin/cargo-ndk" ]; then
+    cargo ndk --target aarch64-linux-android --platform 28 build --release 2>/dev/null || $HOME/.cargo/bin/cargo-ndk --target aarch64-linux-android --platform 28 build --release
+  else
+    # 纯 cargo 交叉：需先 rustup target add
+    rustup target add aarch64-linux-android 2>/dev/null || true
+    cargo build --release --target aarch64-linux-android
+  fi
   # 同时产出一份 aarch64-musl 静态版作为备选（Termux 也能跑，无解释器）
   # rustup target add aarch64-unknown-linux-musl 2>/dev/null || true
   # cargo build --release --target aarch64-unknown-linux-musl 2>/dev/null || true

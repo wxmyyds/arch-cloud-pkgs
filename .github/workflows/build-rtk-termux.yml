@@ -22,21 +22,24 @@ jobs:
     container:
       image: archlinux:base-devel
     steps:
-      - name: 安装基础工具
-        run: |
-          pacman -Syu --noconfirm git sudo rust base-devel
-          # android-ndk 在 extra，cargo-ndk 需 cargo 安装
-          pacman -S --noconfirm android-ndk 2>/dev/null || echo "android-ndk 尝试 pacman 失败，改用 yay/aura 后备"
-          # cargo-ndk 不在官方仓库，用 cargo 安装
-          cargo install cargo-ndk --locked 2>/dev/null || sudo -u builder cargo install cargo-ndk --locked
-          cargo ndk --version || ~/.cargo/bin/cargo-ndk --version || true
-
       - name: 创建构建用户
         run: |
           useradd -m builder
           echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
 
       - uses: actions/checkout@v4
+
+      - name: 安装基础工具
+        run: |
+          pacman -Syu --noconfirm git sudo base-devel rustup android-ndk 2>&1 || pacman -Syu --noconfirm git sudo base-devel rustup
+          # rustup 安装 toolchain
+          rustup toolchain install stable --profile minimal || true
+          rustup default stable || true
+          rustup target add aarch64-linux-android || true
+          # cargo-ndk 需 cargo 安装
+          cargo install cargo-ndk --locked 2>&1 || sudo -u builder cargo install cargo-ndk --locked || true
+          cargo ndk --version 2>&1 || ~/.cargo/bin/cargo-ndk --version 2>&1 || true
+          ls /opt/android-ndk 2>&1 | head; ls /usr/share/android-ndk 2>&1 | head || true
 
       - name: 覆盖 pkgver（如果手动指定版本）
         if: inputs.version != ''
@@ -61,8 +64,9 @@ jobs:
           set -e
           d="pkgs/rtk-termux"
           chown -R builder:builder "$d" /home/builder/.cargo 2>/dev/null || true
+          chown -R builder:builder /opt/android-ndk 2>/dev/null || true
           # rustup target 由 cargo-ndk 自动处理，但先确保
-          sudo -u builder rustup target add aarch64-linux-android || true
+          sudo -u builder rustup target add aarch64-linux-android 2>&1 || rustup target add aarch64-linux-android 2>&1 || true
           echo "::group::makepkg"
           (cd "$d" && sudo -u builder makepkg -sf --noconfirm)
           echo "::endgroup::"
