@@ -10,7 +10,7 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/rtk-ai/rtk"
 license=('Apache-2.0')
 depends=()
-makedepends=('git' 'rust' 'android-ndk' 'rustup') # cargo-ndk 由 workflow 按需 cargo install（AUR，无官方包），不放 makedepends
+makedepends=('git' 'rust' 'rustup') # android-ndk 由 workflow 手动装（AUR，无官方库），cargo-ndk 由 workflow cargo install
 provides=('rtk')
 conflicts=('rtk')
 source=("rtk::git+https://github.com/rtk-ai/rtk.git#tag=v$pkgver")
