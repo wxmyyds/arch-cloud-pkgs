@@ -79,11 +79,22 @@ fi
 if [ "${needs_cargo_ndk:-false}" = "true" ]; then
   # 缓存恢复的 registry 以 root 落地，先归还 builder 再安装（builder 的 cargo 才被 makepkg 用到）
   chown -R builder:builder /home/builder/.cargo 2>/dev/null || true
-  if ! command -v cargo-ndk >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo-ndk" ] && [ ! -x "/home/builder/.cargo/bin/cargo-ndk" ]; then
+  if ! command -v cargo-ndk >/dev/null 2>&1 && [ ! -x /usr/local/bin/cargo-ndk ]; then
     echo "安装 cargo-ndk"
-    cargo install cargo-ndk --locked 2>&1 || sudo -u builder bash -c 'cargo install cargo-ndk --locked' 2>&1 || true
+    cargo install cargo-ndk --locked 2>&1 || true
+    # makepkg 以 builder 运行，root 的 ~/.cargo/bin 对它不可见；
+    # 复制到 /usr/local/bin（默认在 PATH）让所有用户可用，否则 PKGBUILD 会
+    # fallback 到纯 cargo 交叉编译 → 用 cc 链接 → 找不到 NDK 的 -llog/-lunwind
+    if command -v cargo-ndk >/dev/null 2>&1; then
+      cp -f "$(command -v cargo-ndk)" /usr/local/bin/cargo-ndk
+    fi
+    # root 装失败则给 builder 装（其 rustup/cargo 独立）
+    if [ ! -x /usr/local/bin/cargo-ndk ]; then
+      sudo -u builder bash -c 'cargo install cargo-ndk --locked' 2>&1 || true
+      [ -x /home/builder/.cargo/bin/cargo-ndk ] && cp -f /home/builder/.cargo/bin/cargo-ndk /usr/local/bin/cargo-ndk 2>/dev/null || true
+    fi
   fi
-  cargo ndk --version 2>&1 || ~/.cargo/bin/cargo-ndk --version 2>&1 || /home/builder/.cargo/bin/cargo-ndk --version 2>&1 || true
+  /usr/local/bin/cargo-ndk --version 2>&1 || cargo-ndk --version 2>&1 || true
 fi
 
 echo "::endgroup::"
