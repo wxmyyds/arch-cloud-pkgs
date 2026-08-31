@@ -95,8 +95,11 @@ jobs:
         with:
           fetch-depth: 1  # 选包已在 select job 完成，这里浅克隆即可
 
+      # 同步数据库（makepkg -s 需要 core/extra DB，否则报 database file does not exist）
+      - name: 同步 pacman 数据库
+        run: pacman -Sy --noconfirm
+
       # 工具链下沉到各包 PKGBUILD 的 makedepends，由 makepkg -s 自动安装
-      # 基础容器已含 base-devel，无需全局 pacman -Syu git sudo
       # rtk-termux 额外需要 cargo-ndk (AUR/cargo) 和 aarch64-linux-android target，单独处理
       - name: 准备交叉工具链（按包按需）
         run: |
@@ -105,11 +108,12 @@ jobs:
             rtk-termux)
               # PKGBUILD 的 makedepends 已含 git/rust/android-ndk，由 makepkg -s 处理
               # cargo-ndk 不在官方仓库，需 cargo 安装（仅此包需要）
-              if ! command -v cargo-ndk >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo-ndk" ]; then
-                pacman -S --noconfirm rustup 2>&1 || true
+              if ! command -v cargo-ndk >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo-ndk" ] && [ ! -x "/home/builder/.cargo/bin/cargo-ndk" ]; then
+                # rustup 由 PKGBUILD makedepends 提供，但 DB 同步后仍需确保已安装再用
+                pacman -S --needed --noconfirm rustup 2>&1 || true
                 rustup toolchain install stable --profile minimal 2>&1 || true
                 rustup default stable 2>&1 || true
-                cargo install cargo-ndk --locked 2>&1 || sudo -u builder cargo install cargo-ndk --locked 2>&1 || true
+                cargo install cargo-ndk --locked 2>&1 || sudo -u builder bash -c 'cargo install cargo-ndk --locked' 2>&1 || true
               fi
               rustup target add aarch64-linux-android 2>&1 || true
               cargo ndk --version 2>&1 || ~/.cargo/bin/cargo-ndk --version 2>&1 || true
