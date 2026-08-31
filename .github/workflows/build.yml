@@ -95,19 +95,29 @@ jobs:
         with:
           fetch-depth: 1  # 选包已在 select job 完成，这里浅克隆即可
 
-      - name: 安装基础工具
-        run: pacman -Syu --noconfirm git sudo
-
-      # rtk-termux 是交叉编译到 aarch64-linux-android，需额外 NDK + cargo-ndk + rustup target
-      - name: 安装 rtk-termux 交叉工具链（仅该包需要）
-        if: matrix.pkg == 'rtk-termux'
+      # 工具链下沉到各包 PKGBUILD 的 makedepends，由 makepkg -s 自动安装
+      # 基础容器已含 base-devel，无需全局 pacman -Syu git sudo
+      # rtk-termux 额外需要 cargo-ndk (AUR/cargo) 和 aarch64-linux-android target，单独处理
+      - name: 准备交叉工具链（按包按需）
         run: |
-          pacman -S --noconfirm rustup android-ndk 2>&1 || echo "android-ndk 安装跳过，尝试继续"
-          rustup toolchain install stable --profile minimal || true
-          rustup default stable || true
-          rustup target add aarch64-linux-android || true
-          cargo install cargo-ndk --locked 2>&1 || sudo -u builder cargo install cargo-ndk --locked || true
-          cargo ndk --version 2>&1 || ~/.cargo/bin/cargo-ndk --version 2>&1 || true
+          set -e
+          case "${{ matrix.pkg }}" in
+            rtk-termux)
+              # PKGBUILD 的 makedepends 已含 git/rust/android-ndk，由 makepkg -s 处理
+              # cargo-ndk 不在官方仓库，需 cargo 安装（仅此包需要）
+              if ! command -v cargo-ndk >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo-ndk" ]; then
+                pacman -S --noconfirm rustup 2>&1 || true
+                rustup toolchain install stable --profile minimal 2>&1 || true
+                rustup default stable 2>&1 || true
+                cargo install cargo-ndk --locked 2>&1 || sudo -u builder cargo install cargo-ndk --locked 2>&1 || true
+              fi
+              rustup target add aarch64-linux-android 2>&1 || true
+              cargo ndk --version 2>&1 || ~/.cargo/bin/cargo-ndk --version 2>&1 || true
+              ;;
+            *)
+              echo "包 ${{ matrix.pkg }} 无额外工具链，按 PKGBUILD makedepends 自动安装"
+              ;;
+          esac
 
       # 缓存 cargo registry/git + 上次构建的 src/（含 cargo target 目录）。
       # 命中时同版本重建 = 增量编译，从 15~30 分钟降到几分钟；
