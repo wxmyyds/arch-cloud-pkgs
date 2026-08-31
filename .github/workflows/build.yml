@@ -99,18 +99,60 @@ jobs:
       - name: 同步 pacman 数据库
         run: pacman -Sy --noconfirm
 
-      # 工具链下沉到各包 PKGBUILD 的 makedepends + 可选的 prepare.sh
-      # 若 pkgs/<pkg>/prepare.sh 存在则执行（用于 rtk-termux 的 NDK/cargo-ndk 等额外准备），否则跳过
-      - name: 准备额外工具链（按包按需，通用）
+      # 工具链声明式配置：各包目录下 build.conf 声明构建需求，工作流通用解析
+      # 无 build.conf 的包仅按 PKGBUILD makedepends 自动安装
+      - name: 准备额外工具链（按包声明，通用）
         run: |
           set -e
-          PREPARE="pkgs/${{ matrix.pkg }}/prepare.sh"
-          if [ -f "$PREPARE" ]; then
-            echo "发现 $PREPARE，执行额外准备"
-            chmod +x "$PREPARE"
-            bash "$PREPARE"
-          else
-            echo "包 ${{ matrix.pkg }} 无 prepare.sh，按 PKGBUILD makedepends 自动安装"
+          CONF="pkgs/${{ matrix.pkg }}/build.conf"
+          if [ ! -f "$CONF" ]; then
+            echo "包 ${{ matrix.pkg }} 无 build.conf，按 PKGBUILD makedepends 自动安装"
+            exit 0
+          fi
+          echo "发现 $CONF，解析声明式配置"
+          cat "$CONF"
+          # 加载配置（key=value）
+          set -a; source "$CONF"; set +a
+          # 1. 额外 pacman 依赖
+          if [ -n "${extra_pacman_deps:-}" ]; then
+            echo "安装 extra_pacman_deps: $extra_pacman_deps"
+            pacman -S --needed --noconfirm $extra_pacman_deps 2>&1 || true
+          fi
+          # 2. Android NDK
+          if [ "${needs_ndk:-}" = "true" ]; then
+            VER="${ndk_version:-r26d}"
+            if ! pacman -Qi android-ndk >/dev/null 2>&1 && [ ! -d "/opt/android-ndk" ]; then
+              echo "安装 android-ndk $VER (约 1.2GB)"
+              pacman -S --noconfirm android-ndk 2>&1 && echo "pacman 装 android-ndk 成功" || {
+                echo "pacman 无 android-ndk，走官方 zip 直装"
+                curl -fsSL "https://dl.google.com/android/repository/android-ndk-${VER}-linux.zip" -o /tmp/ndk.zip
+                mkdir -p /opt && unzip -q /tmp/ndk.zip -d /opt
+                mv "/opt/android-ndk-${VER}" /opt/android-ndk
+                ln -sf /opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android* /usr/bin/ 2>/dev/null || true
+                rm /tmp/ndk.zip
+              }
+            fi
+            chown -R builder:builder /opt/android-ndk 2>/dev/null || true
+          fi
+          # 3. rustup targets
+          if [ -n "${rust_targets:-}" ]; then
+            pacman -S --needed --noconfirm rustup 2>&1 || true
+            rustup toolchain install stable --profile minimal 2>&1 || true
+            rustup default stable 2>&1 || true
+            sudo -u builder bash -c 'rustup toolchain install stable --profile minimal 2>&1 || true; rustup default stable 2>&1 || true' || true
+            for t in $rust_targets; do
+              echo "添加 rust target: $t"
+              rustup target add "$t" 2>&1 || true
+              sudo -u builder rustup target add "$t" 2>&1 || true
+            done
+          fi
+          # 4. cargo-ndk
+          if [ "${needs_cargo_ndk:-}" = "true" ]; then
+            if ! command -v cargo-ndk >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo-ndk" ] && [ ! -x "/home/builder/.cargo/bin/cargo-ndk" ]; then
+              echo "安装 cargo-ndk"
+              cargo install cargo-ndk --locked 2>&1 || sudo -u builder bash -c 'cargo install cargo-ndk --locked' 2>&1 || true
+            fi
+            cargo ndk --version 2>&1 || ~/.cargo/bin/cargo-ndk --version 2>&1 || /home/builder/.cargo/bin/cargo-ndk --version 2>&1 || true
           fi
 
       # 缓存 cargo registry/git + 上次构建的 src/（含 cargo target 目录）。
