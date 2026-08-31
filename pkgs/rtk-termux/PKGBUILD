@@ -1,0 +1,37 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# rtk Termux Bionic 版：给 Termux aarch64 用，解决官方只有 gnu 预编译的问题
+# 升级方法：改 pkgver 为 https://github.com/rtk-ai/rtk/releases 最新 tag
+
+pkgname=rtk-termux
+pkgver=0.46.0
+pkgrel=1
+pkgdesc="RTK Bionic build for Termux aarch64 (token optimizer for pi/claude/codex)"
+arch=('aarch64')
+url="https://github.com/rtk-ai/rtk"
+license=('Apache-2.0')
+depends=()
+makedepends=('git' 'rust' 'cargo-ndk' 'android-ndk')
+provides=('rtk')
+conflicts=('rtk')
+source=("rtk::git+https://github.com/rtk-ai/rtk.git#tag=v$pkgver")
+sha256sums=('SKIP')
+options=('!debug' '!strip' '!emptydirs')
+
+build() {
+  cd rtk
+  # Termux 的 triple 是 aarch64-linux-android，API 28 兼容 Android 9+
+  # cargo-ndk 会调用 NDK 的 aarch64-linux-android34-clang
+  cargo ndk --target aarch64-linux-android --platform 28 build --release
+  # 同时产出一份 aarch64-musl 静态版作为备选（Termux 也能跑，无解释器）
+  # rustup target add aarch64-unknown-linux-musl 2>/dev/null || true
+  # cargo build --release --target aarch64-unknown-linux-musl 2>/dev/null || true
+}
+
+package() {
+  cd rtk
+  install -Dm755 "target/aarch64-linux-android/release/rtk" "$pkgdir/usr/bin/rtk"
+  # 额外在 startdir 吐裸二进制，供 Termux curl 直装（pacman 外）
+  cp -f "target/aarch64-linux-android/release/rtk" "$startdir/rtk-aarch64-android" 2>/dev/null || true
+  # 验证是 Bionic 而非 gnu
+  file "$pkgdir/usr/bin/rtk" || true
+}
