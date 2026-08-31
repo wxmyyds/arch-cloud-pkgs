@@ -13,12 +13,12 @@ depends=()
 makedepends=('git' 'rust' 'rustup') # android-ndk 由 workflow 手动装（AUR，无官方库），cargo-ndk 由 workflow cargo install
 provides=('rtk')
 conflicts=('rtk')
-source=("rtk::git+https://github.com/rtk-ai/rtk.git#tag=v$pkgver")
+source=("rtk-$pkgver.tar.gz::https://github.com/rtk-ai/rtk/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 options=('!debug' '!strip' '!emptydirs')
 
 build() {
-  cd rtk
+  cd "rtk-$pkgver"
   # Termux 的 triple 是 aarch64-linux-android，API 28 兼容 Android 9+
   # cargo-ndk 会调用 NDK 的 aarch64-linux-android34-clang
   # 优先用 cargo-ndk，fallback 用 cargo + NDK clang
@@ -35,7 +35,7 @@ build() {
 }
 
 package() {
-  cd rtk
+  cd "rtk-$pkgver"
   install -Dm755 "target/aarch64-linux-android/release/rtk" "$pkgdir/usr/bin/rtk"
   # 额外在 startdir 吐裸二进制，供 Termux curl 直装（pacman 外）
   cp -f "target/aarch64-linux-android/release/rtk" "$startdir/rtk-aarch64-android" 2>/dev/null || true

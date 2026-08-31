@@ -106,8 +106,10 @@ jobs:
           set -e
           case "${{ matrix.pkg }}" in
             rtk-termux)
-              # android-ndk 在 AUR，不在官方 DB，需手动装（若 makepkg 已装则跳过）
-              if ! pacman -Qi android-ndk >/dev/null 2>&1; then
+              # unzip 需在 NDK 解压前就绪
+              pacman -S --needed --noconfirm unzip 2>&1 || true
+              # android-ndk 在 AUR，不在官方 DB，需手动装（若已装则跳过）
+              if ! pacman -Qi android-ndk >/dev/null 2>&1 && [ ! -d "/opt/android-ndk" ]; then
                 echo "安装 android-ndk (约 1.2GB，需几分钟)"
                 # 官方直链 + 静默安装到 /opt/android-ndk
                 # 若 pacman 官方未来有则优先
@@ -121,7 +123,7 @@ jobs:
                 }
               fi
               # builder 的 rustup 环境与 root 不同，需两边都设 default
-              pacman -S --needed --noconfirm rustup unzip 2>&1 || pacman -S --needed --noconfirm unzip 2>&1 || true
+              pacman -S --needed --noconfirm rustup 2>&1 || true
               rustup toolchain install stable --profile minimal 2>&1 || true
               rustup default stable 2>&1 || true
               sudo -u builder bash -c 'rustup toolchain install stable --profile minimal 2>&1 || true; rustup default stable 2>&1 || true' || true
