@@ -23,7 +23,13 @@ jobs:
       image: archlinux:base-devel
     steps:
       - name: 安装基础工具
-        run: pacman -Syu --noconfirm git sudo android-ndk cargo-ndk rust
+        run: |
+          pacman -Syu --noconfirm git sudo rust base-devel
+          # android-ndk 在 extra，cargo-ndk 需 cargo 安装
+          pacman -S --noconfirm android-ndk 2>/dev/null || echo "android-ndk 尝试 pacman 失败，改用 yay/aura 后备"
+          # cargo-ndk 不在官方仓库，用 cargo 安装
+          cargo install cargo-ndk --locked 2>/dev/null || sudo -u builder cargo install cargo-ndk --locked
+          cargo ndk --version || ~/.cargo/bin/cargo-ndk --version || true
 
       - name: 创建构建用户
         run: |

@@ -10,7 +10,7 @@ arch=('aarch64')
 url="https://github.com/rtk-ai/rtk"
 license=('Apache-2.0')
 depends=()
-makedepends=('git' 'rust' 'cargo-ndk' 'android-ndk')
+makedepends=('git' 'rust' 'android-ndk') # cargo-ndk 由 cargo install 提供，不放 makedepends
 provides=('rtk')
 conflicts=('rtk')
 source=("rtk::git+https://github.com/rtk-ai/rtk.git#tag=v$pkgver")
