@@ -99,44 +99,19 @@ jobs:
       - name: 同步 pacman 数据库
         run: pacman -Sy --noconfirm
 
-      # 工具链下沉到各包 PKGBUILD 的 makedepends，由 makepkg -s 自动安装
-      # rtk-termux 额外需要 android-ndk(额外下载) + cargo-ndk(AUR/cargo) + rustup target
-      - name: 准备交叉工具链（按包按需）
+      # 工具链下沉到各包 PKGBUILD 的 makedepends + 可选的 prepare.sh
+      # 若 pkgs/<pkg>/prepare.sh 存在则执行（用于 rtk-termux 的 NDK/cargo-ndk 等额外准备），否则跳过
+      - name: 准备额外工具链（按包按需，通用）
         run: |
           set -e
-          case "${{ matrix.pkg }}" in
-            rtk-termux)
-              # unzip 需在 NDK 解压前就绪
-              pacman -S --needed --noconfirm unzip 2>&1 || true
-              # android-ndk 在 AUR，不在官方 DB，需手动装（若已装则跳过）
-              if ! pacman -Qi android-ndk >/dev/null 2>&1 && [ ! -d "/opt/android-ndk" ]; then
-                echo "安装 android-ndk (约 1.2GB，需几分钟)"
-                # 官方直链 + 静默安装到 /opt/android-ndk
-                # 若 pacman 官方未来有则优先
-                pacman -S --noconfirm android-ndk 2>&1 && echo "pacman 装 android-ndk 成功" || {
-                  echo "pacman 无 android-ndk，走官方 zip 直装"
-                  curl -fsSL https://dl.google.com/android/repository/android-ndk-r26d-linux.zip -o /tmp/ndk.zip
-                  mkdir -p /opt && unzip -q /tmp/ndk.zip -d /opt
-                  mv /opt/android-ndk-r26d /opt/android-ndk
-                  ln -sf /opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android* /usr/bin/ 2>/dev/null || true
-                  rm /tmp/ndk.zip
-                }
-              fi
-              # builder 的 rustup 环境与 root 不同，需两边都设 default
-              pacman -S --needed --noconfirm rustup 2>&1 || true
-              rustup toolchain install stable --profile minimal 2>&1 || true
-              rustup default stable 2>&1 || true
-              sudo -u builder bash -c 'rustup toolchain install stable --profile minimal 2>&1 || true; rustup default stable 2>&1 || true' || true
-              if ! command -v cargo-ndk >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo-ndk" ] && [ ! -x "/home/builder/.cargo/bin/cargo-ndk" ]; then
-                cargo install cargo-ndk --locked 2>&1 || sudo -u builder bash -c 'cargo install cargo-ndk --locked' 2>&1 || true
-              fi
-              sudo -u builder rustup target add aarch64-linux-android 2>&1 || rustup target add aarch64-linux-android 2>&1 || true
-              cargo ndk --version 2>&1 || ~/.cargo/bin/cargo-ndk --version 2>&1 || /home/builder/.cargo/bin/cargo-ndk --version 2>&1 || true
-              ;;
-            *)
-              echo "包 ${{ matrix.pkg }} 无额外工具链，按 PKGBUILD makedepends 自动安装"
-              ;;
-          esac
+          PREPARE="pkgs/${{ matrix.pkg }}/prepare.sh"
+          if [ -f "$PREPARE" ]; then
+            echo "发现 $PREPARE，执行额外准备"
+            chmod +x "$PREPARE"
+            bash "$PREPARE"
+          else
+            echo "包 ${{ matrix.pkg }} 无 prepare.sh，按 PKGBUILD makedepends 自动安装"
+          fi
 
       # 缓存 cargo registry/git + 上次构建的 src/（含 cargo target 目录）。
       # 命中时同版本重建 = 增量编译，从 15~30 分钟降到几分钟；
@@ -160,10 +135,8 @@ jobs:
           d="pkgs/${{ matrix.pkg }}"
           # 缓存以 root 恢复，先归还给 builder（读写都需要）
           chown -R builder:builder "$d" /home/builder/.cargo 2>/dev/null || true
-          if [ "${{ matrix.pkg }}" = "rtk-termux" ]; then
-            chown -R builder:builder /opt/android-ndk 2>/dev/null || true
-            sudo -u builder rustup target add aarch64-linux-android 2>&1 || true
-          fi
+          # 若 prepare.sh 已准备 NDK，确保 builder 可读
+          chown -R builder:builder /opt/android-ndk 2>/dev/null || true
           echo "::group::构建 ${{ matrix.pkg }}"
           (cd "$d" && sudo -u builder makepkg -sf --noconfirm)
           # 产物改用 .pacman 扩展名（与 fpm/tauri/electron-builder 约定一致），
