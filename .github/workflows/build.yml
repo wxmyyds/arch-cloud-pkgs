@@ -119,7 +119,7 @@ jobs:
       # 同一 NDK 版本全局只存一份，A/C/D 包可共同引用
       - name: 恢复 NDK 缓存
         if: steps.conf.outputs.needs_ndk == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         continue-on-error: true
         with:
           path: /opt/android-ndk
@@ -130,7 +130,7 @@ jobs:
       # （crate 源码、上游 tarball/git 副本），共享不会污染——与 NDK 同类，
       # 归工具链层而非包层；包与包之间绝不共享的是编译产物（见下）
       - name: 恢复工具链缓存（cargo registry / 源码下载）
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         continue-on-error: true
         with:
           path: |
@@ -146,11 +146,11 @@ jobs:
       # key 受：包名 + PKGBUILD + build.conf + 工具链版本(NDK) + 架构 影响；
       # 锁文件在源码内（git tag 固定），pkgver 升级时已被 PKGBUILD 哈希覆盖
       - name: 恢复包构建缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         continue-on-error: true
         with:
           path: pkgs/${{ matrix.pkg }}/${{ steps.conf.outputs.cache_dirs }}
-          key: build-${{ matrix.pkg }}-${{ hashFiles(format('pkgs/{0}/PKGBUILD', matrix.pkg), format('pkgs/{0}/build.conf')) }}-${{ steps.conf.outputs.ndk_version }}-${{ runner.arch }}
+          key: build-${{ matrix.pkg }}-${{ hashFiles(format('pkgs/{0}/PKGBUILD', matrix.pkg), format('pkgs/{0}/build.conf', matrix.pkg)) }}-${{ steps.conf.outputs.ndk_version }}-${{ runner.arch }}
           restore-keys: |
             build-${{ matrix.pkg }}-
 
@@ -187,7 +187,7 @@ jobs:
           echo "::endgroup::"
 
       - name: 上传单包产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: arch-packages-${{ matrix.pkg }}
           path: |
@@ -203,12 +203,12 @@ jobs:
     if: needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           pattern: arch-packages-*
           merge-multiple: true
           path: merged
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: arch-packages
           path: merged
