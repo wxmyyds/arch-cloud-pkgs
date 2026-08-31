@@ -121,7 +121,7 @@ jobs:
                 }
               fi
               # builder 的 rustup 环境与 root 不同，需两边都设 default
-              pacman -S --needed --noconfirm rustup 2>&1 || true
+              pacman -S --needed --noconfirm rustup unzip 2>&1 || pacman -S --needed --noconfirm unzip 2>&1 || true
               rustup toolchain install stable --profile minimal 2>&1 || true
               rustup default stable 2>&1 || true
               sudo -u builder bash -c 'rustup toolchain install stable --profile minimal 2>&1 || true; rustup default stable 2>&1 || true' || true
