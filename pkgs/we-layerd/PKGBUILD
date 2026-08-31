@@ -62,7 +62,11 @@ prepare() {
 
 build() {
     cd "$_pkgname"
-    export CARGO_TARGET_DIR="$srcdir/$_pkgname/target"
+    # 编译缓存与源码分离：统一放 $startdir/target（包目录），由工作流按包缓存；
+    # 但上游 xtask install 硬编码读源码目录下 target/...，用符号链接桥接
+    rm -rf target
+    ln -sfn "$startdir/target" target
+    export CARGO_TARGET_DIR="$startdir/target"
     cargo build --locked --release --workspace
 }
 

@@ -32,13 +32,14 @@ prepare() {
 
 build() {
     cd "$_pkgname-$pkgver"
-    export CARGO_TARGET_DIR=target
+    # 编译缓存与源码分离：统一放 $startdir/target（包目录），由工作流按包缓存
+    export CARGO_TARGET_DIR="$startdir/target"
     cargo build --frozen --release
 }
 
 package() {
     cd "$_pkgname-$pkgver"
-    install -Dm0755 -t "$pkgdir/usr/bin/" "target/release/$_pkgname"
+    install -Dm0755 -t "$pkgdir/usr/bin/" "$startdir/target/release/$_pkgname"
     install -Dm0644 -t "$pkgdir/usr/share/licenses/$pkgname/" LICENCE
     install -Dm0644 -t "$pkgdir/usr/lib/systemd/user/" wayland-pipewire-idle-inhibit.service
     # Rust release 二进制带完整 debug 符号，必须 strip 才能瘦身到正常大小

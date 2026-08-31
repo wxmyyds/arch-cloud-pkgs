@@ -12,15 +12,25 @@
 #   needs_cargo_ndk    是否需要 cargo-ndk (true/false)
 #   extra_artifacts    额外上传产物（构建后由工作流收集）
 #
-# 无 build.conf 的包直接跳过（makepkg -s 会按 makedepends 自动装）。
+# 无 build.conf 的包仅跳过“按包工具链准备”，通用准备仍执行
+# （makepkg -s 会按 PKGBUILD makedepends 自动安装）
 # =====================================================================
 set -euo pipefail
 
 d="${1:?用法: prepare-toolchain.sh <包目录>}"
 conf="$d/build.conf"
 
+# --- 0. 通用准备（所有包）：源码下载缓存 + cargo 目录归属 ---
+# SRCDEST：tarball/git 的只读内容寻址副本，共享无害（工具链层资源）；
+# 与包目录 src/（解压后的构建现场）分离——缓存只保存下载物，不保存构建现场。
+# cargo registry/git 同理归工具链层（内容寻址只读），但缓存以 root 恢复后
+# 必须归还 builder（makepkg 以 builder 运行，--frozen/--locked 也要写 registry）
+mkdir -p /opt/cache/sources
+chown -R builder:builder /opt/cache/sources /home/builder/.cargo 2>/dev/null || true
+echo "SRCDEST=/opt/cache/sources" >> /etc/makepkg.conf
+
 if [ ! -f "$conf" ]; then
-  echo "::notice::$d 无 build.conf，跳过工具链准备"
+  echo "::notice::$d 无 build.conf，跳过按包工具链准备"
   exit 0
 fi
 
@@ -32,6 +42,7 @@ set -a; source "$conf"; set +a
 # 向后续步骤暴露声明值（供缓存 key、上传路径等使用）
 echo "needs_ndk=${needs_ndk:-false}" >> "$GITHUB_OUTPUT"
 echo "ndk_version=${ndk_version:-r26d}" >> "$GITHUB_OUTPUT"
+echo "cache_dirs=${cache_dirs:-target}" >> "$GITHUB_OUTPUT"
 echo "extra_artifacts=${extra_artifacts:-}" >> "$GITHUB_OUTPUT"
 
 # --- 1. 额外 pacman 依赖（构建前提，失败即失败，尽早暴露）---

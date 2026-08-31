@@ -19,6 +19,9 @@ options=('!debug' '!strip' '!emptydirs')
 
 build() {
   cd "rtk-$pkgver"
+  # 编译缓存与源码分离：统一放 $startdir/target（包目录），由工作流按包缓存；
+  # src/（解压的源码现场）不缓存，每次重新获取
+  export CARGO_TARGET_DIR="$startdir/target"
   # makepkg 的 CFLAGS 含 -march=x86-64，会泄漏到 aarch64 交叉编译导致 clang 报错，需清空
   export CFLAGS=""
   export CXXFLAGS=""
@@ -44,9 +47,9 @@ build() {
 
 package() {
   cd "rtk-$pkgver"
-  install -Dm755 "target/aarch64-linux-android/release/rtk" "$pkgdir/usr/bin/rtk"
+  install -Dm755 "$startdir/target/aarch64-linux-android/release/rtk" "$pkgdir/usr/bin/rtk"
   # 额外在 startdir 吐裸二进制，供 Termux curl 直装（pacman 外）
-  cp -f "target/aarch64-linux-android/release/rtk" "$startdir/rtk-aarch64-android" 2>/dev/null || true
+  cp -f "$startdir/target/aarch64-linux-android/release/rtk" "$startdir/rtk-aarch64-android" 2>/dev/null || true
   # 验证是 Bionic 而非 gnu
   file "$pkgdir/usr/bin/rtk" || true
 }

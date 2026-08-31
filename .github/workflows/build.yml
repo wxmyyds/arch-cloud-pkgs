@@ -111,10 +111,12 @@ jobs:
           fi
           echo "needs_ndk=${needs_ndk:-false}" >> "$GITHUB_OUTPUT"
           echo "ndk_version=${ndk_version:-r26d}" >> "$GITHUB_OUTPUT"
+          echo "cache_dirs=${cache_dirs:-target}" >> "$GITHUB_OUTPUT"
           echo "extra_artifacts=${extra_artifacts:-}" >> "$GITHUB_OUTPUT"
 
-      # NDK 缓存：解压后的 ~3GB 目录跨包/跨构建复用，省去每次 1.2GB 下载 + 解压。
-      # 同一 NDK 版本全局只存一份；缓存故障（配额/网络）不阻断构建。
+      # ---- 工具链缓存：跨包共享的固定资源，与包构建状态无关 ----
+      # NDK：解压后的 ~3GB 目录跨包/跨构建复用，省去每次 1.2GB 下载 + 解压；
+      # 同一 NDK 版本全局只存一份，A/C/D 包可共同引用
       - name: 恢复 NDK 缓存
         if: steps.conf.outputs.needs_ndk == 'true'
         uses: actions/cache@v4
@@ -124,18 +126,31 @@ jobs:
           key: android-ndk-${{ steps.conf.outputs.ndk_version }}
           restore-keys: android-ndk-
 
-      # cargo registry/git + 上次构建的 src/（含 cargo target 目录）。
-      # 命中时同版本重建 = 增量编译，从 15~30 分钟降到几分钟；
-      # 键含 PKGBUILD 哈希，升级 pkgver 等任何改动会自动失效（全量重编一次）。
-      - name: 恢复构建缓存
+      # cargo registry/git + 源码下载缓存（SRCDEST）：内容寻址的只读资源
+      # （crate 源码、上游 tarball/git 副本），共享不会污染——与 NDK 同类，
+      # 归工具链层而非包层；包与包之间绝不共享的是编译产物（见下）
+      - name: 恢复工具链缓存（cargo registry / 源码下载）
         uses: actions/cache@v4
         continue-on-error: true
         with:
           path: |
             /home/builder/.cargo/registry
             /home/builder/.cargo/git
-            pkgs/${{ matrix.pkg }}/src
-          key: build-${{ matrix.pkg }}-${{ hashFiles(format('pkgs/{0}/PKGBUILD', matrix.pkg)) }}
+            /opt/cache/sources
+          key: toolchain-cargo
+
+      # ---- 包缓存：按包完全隔离，只缓存本包编译产物 ----
+      # 编译缓存目录 = 包目录下 cache_dirs 声明的相对路径（Rust 约定 target/）；
+      # src/（解压的源码现场）不缓存——每次由 makepkg 从 SRCDEST 重新获取，
+      # 杜绝“源码与中间产物混杂的大杂烩缓存”。
+      # key 受：包名 + PKGBUILD + build.conf + 工具链版本(NDK) + 架构 影响；
+      # 锁文件在源码内（git tag 固定），pkgver 升级时已被 PKGBUILD 哈希覆盖
+      - name: 恢复包构建缓存
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: pkgs/${{ matrix.pkg }}/${{ steps.conf.outputs.cache_dirs }}
+          key: build-${{ matrix.pkg }}-${{ hashFiles(format('pkgs/{0}/PKGBUILD', matrix.pkg), format('pkgs/{0}/build.conf')) }}-${{ steps.conf.outputs.ndk_version }}-${{ runner.arch }}
           restore-keys: |
             build-${{ matrix.pkg }}-
 
@@ -149,7 +164,7 @@ jobs:
           set -e
           d="pkgs/${{ matrix.pkg }}"
           # 缓存以 root 恢复，先归还给 builder（读写都需要）
-          chown -R builder:builder "$d" /home/builder/.cargo 2>/dev/null || true
+          chown -R builder:builder "$d" /home/builder/.cargo /opt/cache/sources 2>/dev/null || true
           echo "::group::构建 ${{ matrix.pkg }}"
           (cd "$d" && sudo -u builder makepkg -sf --noconfirm)
           # 产物改用 .pacman 扩展名（与 fpm/tauri/electron-builder 约定一致），
