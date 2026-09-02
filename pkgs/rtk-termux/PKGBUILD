@@ -68,8 +68,8 @@ build() {
 package() {
   cd "rtk-$pkgver"
   install -Dm755 "$startdir/target/aarch64-linux-android/release/rtk" "$pkgdir/usr/bin/rtk"
-  # 额外在 startdir 吐裸二进制，供 Termux curl 直装（pacman 外）
+  # 额外在 startdir 吐裸二进制，供 Termux curl 直装（pacman 外）。
+  # 不在 package() 的 fakeroot 环境中调用 file：部分 Arch runner 的 fakeroot
+  # seccomp 会让 file 触发 Bad system call；格式检查移到 workflow 的校验步骤。
   cp -f "$startdir/target/aarch64-linux-android/release/rtk" "$startdir/rtk-aarch64-android"
-  # 验证是 Bionic 而非 gnu
-  file "$pkgdir/usr/bin/rtk"
 }

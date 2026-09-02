@@ -319,6 +319,18 @@ jobs:
             pacman -Qip "$f"
           done
           echo "::endgroup::"
+          if [ "$PKG" = "rtk-termux" ]; then
+            echo "::group::Android ELF 检查 $PKG"
+            android_bin="$d/extra_artifacts/rtk-aarch64-android"
+            if [ ! -f "$android_bin" ]; then
+              echo "::error::缺少 Android 额外产物 $android_bin"
+              exit 1
+            fi
+            file "$android_bin"
+            readelf -h "$android_bin" | grep -E 'Class:|Machine:|OS/ABI:'
+            file "$android_bin" | grep -Eiq 'aarch64|ARM aarch64|Android'
+            echo "::endgroup::"
+          fi
           pacman -S --needed --noconfirm namcap
           echo "::group::namcap $PKG"
           namcap "${files[@]}"
