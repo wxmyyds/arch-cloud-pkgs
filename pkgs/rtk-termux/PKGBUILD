@@ -1,20 +1,33 @@
 # Maintainer: wxmyyds <wxmyyds0601@163.com>
 # rtk Termux Bionic 版：给 Termux aarch64 用，解决官方只有 gnu 预编译的问题
-# 升级方法：改 pkgver 为 https://github.com/rtk-ai/rtk/releases 最新 tag
+# 升级方法：改 pkgver 为 https://github.com/rtk-ai/rtk/releases 最新 tag，
+#           并把 sha256sums 换成新 tarball 的实际值（见下）
+#
+# 注意：本包是交叉编译产物，内含 aarch64-linux-android（Bionic）二进制，
+#       不是给本机 Arch 用的。真正要分发的是 extra_artifacts 里的裸二进制
+#       rtk-aarch64-android（供 Termux 直接取用），pacman 包只是顺带产物。
 
 pkgname=rtk-termux
-pkgver=0.46.0
+pkgver=0.47.0
 pkgrel=1
 pkgdesc="RTK Bionic build for Termux aarch64 (token optimizer for pi/claude/codex)"
-arch=('x86_64' 'aarch64')
+# 产物固定是 aarch64-linux-android（Bionic），与构建机架构无关，因此按目标架构声明。
+# 这样在 x86_64 主机上 pacman -U 会被架构检查直接拦下，避免把 Android 二进制
+# 装进 /usr/bin/rtk 顶掉正常的 rtk。
+# CI 侧靠 build.conf 的 makepkg_flags="--ignorearch" 允许在 x86_64 runner 上构建。
+arch=('aarch64')
 url="https://github.com/rtk-ai/rtk"
 license=('Apache-2.0')
 depends=()
-makedepends=('git' 'rust' 'rustup') # android-ndk 由 workflow 手动装（AUR，无官方库），cargo-ndk 由 workflow cargo install
+# 不能同时写 rust 和 rustup：Arch 的 rustup 包 conflicts=('cargo' 'rust' 'rustfmt')
+# 且自身 provides rust/cargo（/usr/bin/cargo 是 rustup shim），交叉编译需要 rustup
+# 才能 rustup target add，所以只保留 rustup。
+# android-ndk 由 workflow 手动装（官方仓库无此包），cargo-ndk 由 workflow cargo install
+makedepends=('git' 'rustup')
 provides=('rtk')
 conflicts=('rtk')
 source=("rtk-$pkgver.tar.gz::https://github.com/rtk-ai/rtk/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('b9e74c7da9fc0f6ee63a993d590cc518973cae912f4fb6e2f2c44c9072b03ac6')
 options=('!debug' '!strip' '!emptydirs')
 
 build() {
@@ -27,17 +40,24 @@ build() {
   export CXXFLAGS=""
   export LDFLAGS=""
   export CPPFLAGS=""
-  # 确保 NDK 在 PATH（workflow 已设 GITHUB_ENV，这里兜底）
-  export PATH="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+  # sudo -u builder 会重置环境变量，workflow 里写进 GITHUB_ENV 的值到不了这里，
+  # 所以工具链路径必须在 PKGBUILD 内显式兜底（与 prepare-toolchain.sh 保持一致）
+  export RUSTUP_HOME="${RUSTUP_HOME:-/opt/rustup}"
+  export CARGO_HOME="${CARGO_HOME:-/home/builder/.cargo}"
+  export PATH="$CARGO_HOME/bin:/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
   export ANDROID_NDK_HOME="/opt/android-ndk"
-  # Termux 的 triple 是 aarch64-linux-android，API 28 兼容 Android 9+
-  # cargo-ndk 会调用 NDK 的 aarch64-linux-android34-clang
-  # 优先用 cargo-ndk，fallback 用 cargo + NDK clang
-  if command -v cargo-ndk >/dev/null 2>&1 || [ -x "$HOME/.cargo/bin/cargo-ndk" ]; then
-    cargo ndk --target aarch64-linux-android --platform 28 build --release 2>/dev/null || $HOME/.cargo/bin/cargo-ndk --target aarch64-linux-android --platform 28 build --release
+  # Termux 的 triple 是 aarch64-linux-android，API 28 兼容 Android 9+（Termux 要求 ≥24）
+  # 工作流通过 NDK_PLATFORM 传入 build.conf，默认值与本地构建保持一致
+  export NDK_PLATFORM="${NDK_PLATFORM:-28}"
+  # cargo-ndk 会调用 NDK 的 aarch64-linux-android${NDK_PLATFORM}-clang
+  if command -v cargo-ndk >/dev/null 2>&1; then
+    # 主路径：cargo-ndk 会把 NDK 的 clang 设为链接器并注入 -llog/-lunwind
+    cargo ndk --target aarch64-linux-android --platform "$NDK_PLATFORM" build --release
   else
-    # 纯 cargo 交叉：需先 rustup target add
-    rustup target add aarch64-linux-android 2>/dev/null || true
+    # 兜底：纯 cargo 交叉。需要 rustup 装过该 target（否则没有对应 std），
+    # 且链接器退回 cc，很可能找不到 NDK 的 -llog/-lunwind
+    echo "::warning::cargo-ndk 不可用，回退纯 cargo 交叉编译（链接可能失败）"
+    rustup target add aarch64-linux-android
     cargo build --release --target aarch64-linux-android
   fi
   # 同时产出一份 aarch64-musl 静态版作为备选（Termux 也能跑，无解释器）
@@ -49,7 +69,7 @@ package() {
   cd "rtk-$pkgver"
   install -Dm755 "$startdir/target/aarch64-linux-android/release/rtk" "$pkgdir/usr/bin/rtk"
   # 额外在 startdir 吐裸二进制，供 Termux curl 直装（pacman 外）
-  cp -f "$startdir/target/aarch64-linux-android/release/rtk" "$startdir/rtk-aarch64-android" 2>/dev/null || true
+  cp -f "$startdir/target/aarch64-linux-android/release/rtk" "$startdir/rtk-aarch64-android"
   # 验证是 Bionic 而非 gnu
-  file "$pkgdir/usr/bin/rtk" || true
+  file "$pkgdir/usr/bin/rtk"
 }

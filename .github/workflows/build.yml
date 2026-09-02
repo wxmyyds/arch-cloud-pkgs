@@ -11,6 +11,15 @@ on:
     paths:
       - 'pkgs/**'
       - '.github/workflows/build.yml'
+  # Arch 是滚动发行版，glibc / gcc-libs 等 soname bump 会让已构建的包静默失效。
+  # 每月全量重建一次，避免等到装包时才发现链接断开。
+  # 定时触发时 github.event.before 为空，select job 会走"构建全部"分支。
+  schedule:
+    - cron: '17 4 1 * *'
+
+# 最小权限：本工作流只读代码；产物上传走 job 的 runtime token，不受此约束
+permissions:
+  contents: read
 
 # 同一分支的新提交会取消仍在跑的旧构建，避免重复占用 runner
 concurrency:
@@ -22,6 +31,7 @@ jobs:
   #      输出 JSON 数组给 build 的 matrix 用；空数组时 build 直接跳过
   select:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       pkgs: ${{ steps.select.outputs.json }}
     steps:
@@ -31,25 +41,36 @@ jobs:
 
       - name: 确定要构建的包列表
         id: select
+        # 所有 GitHub 上下文一律经 env 传入，绝不在 run: 里直接写 ${{ }}：
+        # ${{ }} 发生在 shell 解析之前，是纯文本替换，输入里带个分号就能在
+        # runner 上执行任意命令（inputs.packages 是用户可控的）
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PKGS: ${{ inputs.packages }}
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
           set -euo pipefail
+          all_pkgs() {
+            # 列出全部包目录；没有包时返回空（不用 ls | xargs，避免空输入时
+            # xargs 无参执行 basename 报 usage）
+            find pkgs -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null
+          }
           select_pkgs() {
             # 手动触发：用输入指定的包；留空则全部
-            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-              INPUT="${{ inputs.packages }}"
-              if [ -n "$INPUT" ]; then
-                echo "$INPUT" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              if [ -n "$INPUT_PKGS" ]; then
+                printf '%s\n' "$INPUT_PKGS" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
               else
-                ls -d pkgs/*/ 2>/dev/null | xargs -n1 basename
+                all_pkgs
               fi
               return
             fi
-            # push 触发：diff 出变更的包，但只保留目录仍存在的
+            # push / 定时触发：diff 出变更的包，但只保留目录仍存在的
             # （删除的包没有可构建的东西，跳过而不是报错）
-            BEFORE="${{ github.event.before }}"
-            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-              # 新分支首个 push：没有可 diff 的基线，构建全部
-              ls -d pkgs/*/ 2>/dev/null | xargs -n1 basename
+            BEFORE="${BEFORE_SHA:-}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              # 新分支首个 push / 定时触发：没有可 diff 的基线，构建全部
+              all_pkgs
               return
             fi
             git diff --name-only "$BEFORE" HEAD -- pkgs/ | cut -d/ -f2 | sort -u | while IFS= read -r n; do
@@ -59,8 +80,14 @@ jobs:
             done
           }
           mapfile -t names < <(select_pkgs)
-          # 校验包目录存在（手动输入的包名可能拼错）
-          for n in "${names[@]}"; do
+          # 校验包名格式与目录存在，禁止路径分隔符和 shell 元字符
+          for n in ${names[@]+"${names[@]}"}; do
+            case "$n" in
+              ''|*[!A-Za-z0-9._-]*)
+                echo "::error::非法包名 '$n'，只允许字母、数字、点、下划线和短横线"
+                exit 1
+                ;;
+            esac
             if [ ! -d "pkgs/$n" ]; then
               echo "::error::未找到包目录 pkgs/$n"
               exit 1
@@ -79,40 +106,117 @@ jobs:
     needs: select
     if: needs.select.outputs.pkgs != '[]'
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     container:
       image: archlinux:base-devel
     strategy:
       fail-fast: false
       matrix:
         pkg: ${{ fromJSON(needs.select.outputs.pkgs) }}
+    env:
+      PKG: ${{ matrix.pkg }}
     steps:
       - name: 创建构建用户（makepkg 拒绝 root）
         run: |
           useradd -m builder
           echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          # sudo 要求引入的 sudoers 文件不可被组/其他用户写，推荐 0440
+          chmod 0440 /etc/sudoers.d/builder
 
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1  # 选包已在 select job 完成，这里浅克隆即可
 
-      # -Syu 而非 -Sy：避免数据库与已装包版本脱节的 partial-upgrade 隐患
-      # （makepkg -s 需要最新 DB）
       - name: 同步 pacman 数据库
-        run: pacman -Syu --needed --noconfirm
+        run: |
+          # 镜像内置的 archlinux-keyring 可能落后于仓库签名，直接 -Syu 会以
+          # 签名校验失败告终——这是 Arch CI 最经典的间歇性故障，先单独更新 keyring
+          pacman -Sy --noconfirm archlinux-keyring
+          # -Syu 而非 -Sy：避免数据库与已装包版本脱节的 partial-upgrade 隐患
+          # （makepkg -s 需要最新 DB）
+          pacman -Syu --needed --noconfirm
 
-      # 读取包声明（build.conf），供缓存 key / 上传路径使用
+      # 读取包声明（build.conf），供缓存 key / 上传路径使用。
+      # 这里是 build.conf 的**唯一**解析点：解析结果同时写进 GITHUB_OUTPUT（给本
+      # job 后续步骤）和 GITHUB_ENV（给 prepare-toolchain.sh），保证两处看到的是
+      # 同一份值，不会出现"脚本和工作流各写一份默认值、改一处忘一处"。
       - name: 读取构建声明 build.conf
         id: conf
         run: |
           set -euo pipefail
-          CONF="pkgs/${{ matrix.pkg }}/build.conf"
+          CONF="pkgs/$PKG/build.conf"
           if [ -f "$CONF" ]; then
-            set -a; source "$CONF"; set +a
+            # build.conf 只允许受控的变量赋值；逐项解析，禁止把仓库内容当作脚本执行
+            while IFS= read -r line || [ -n "$line" ]; do
+              trimmed="${line#"${line%%[![:space:]]*}"}"
+              [ -z "$trimmed" ] && continue
+              case "$trimmed" in
+                \#*) continue ;;
+              esac
+              if [[ ! "$trimmed" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+                echo "::error::build.conf 只能包含变量赋值: $line"
+                exit 1
+              fi
+              key="${BASH_REMATCH[1]}"
+              raw="${BASH_REMATCH[2]}"
+              case "$key" in
+                needs_ndk|ndk_version|ndk_sha1|ndk_platform|cache_dirs|extra_artifacts|makepkg_flags|rust_targets|needs_cargo_ndk|extra_pacman_deps) ;;
+                *)
+                  echo "::error::build.conf 包含不支持的字段: $key"
+                  exit 1
+                  ;;
+              esac
+              # 支持无空格的裸值或成对的单/双引号值；值本身只允许配置所需字符
+              case "$raw" in
+                \"*\") value="${raw:1:${#raw}-2}" ;;
+                \'*\') value="${raw:1:${#raw}-2}" ;;
+                *) value="$raw" ;;
+              esac
+              if [[ ! "$raw" =~ ^[A-Za-z0-9_./:+,\ -]*$ && ! "$raw" =~ ^\"[A-Za-z0-9_./:+,\ -]*\"$ && ! "$raw" =~ ^\'[A-Za-z0-9_./:+,\ -]*\'$ ]]; then
+                echo "::error::build.conf 含有不安全字符: $line"
+                exit 1
+              fi
+              printf -v "$key" '%s' "$value"
+            done < "$CONF"
           fi
-          echo "needs_ndk=${needs_ndk:-false}" >> "$GITHUB_OUTPUT"
-          echo "ndk_version=${ndk_version:-r26d}" >> "$GITHUB_OUTPUT"
-          echo "cache_dirs=${cache_dirs:-target}" >> "$GITHUB_OUTPUT"
-          echo "extra_artifacts=${extra_artifacts:-}" >> "$GITHUB_OUTPUT"
+          emit() {
+            echo "$1" >> "$GITHUB_OUTPUT"
+            echo "$1" >> "$GITHUB_ENV"
+          }
+          emit "needs_ndk=${needs_ndk:-false}"
+          emit "ndk_version=${ndk_version:-r26d}"
+          emit "cache_dirs=${cache_dirs:-target}"
+          emit "extra_artifacts=${extra_artifacts:-}"
+          emit "makepkg_flags=${makepkg_flags:-}"
+          emit "ndk_sha1=${ndk_sha1:-}"
+          emit "ndk_platform=${ndk_platform:-}"
+
+          if [ "${needs_ndk:-false}" = "true" ]; then
+            if [[ ! "${ndk_sha1:-}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "::error::needs_ndk=true 时必须配置 40 位十六进制 ndk_sha1"
+              exit 1
+            fi
+            if [[ ! "${ndk_platform:-28}" =~ ^[0-9]+$ ]] || [ "${ndk_platform:-28}" -lt 21 ] || [ "${ndk_platform:-28}" -gt 35 ]; then
+              echo "::error::ndk_platform 必须是 21 到 35 之间的 Android API level"
+              exit 1
+            fi
+          fi
+
+          # 配置值只允许用于当前包目录内，避免缓存和产物路径穿越
+          case "${cache_dirs:-target}" in
+            ''|/*|*..*|*[$'\n\r']*)
+              echo "::error::非法 cache_dirs 配置"
+              exit 1
+              ;;
+          esac
+          for artifact in ${extra_artifacts:-}; do
+            case "$artifact" in
+              ''|/*|*/*|*..*)
+                echo "::error::非法 extra_artifacts 条目 '$artifact'"
+                exit 1
+                ;;
+            esac
+          done
 
       # ---- 工具链缓存：跨包共享的固定资源，与包构建状态无关 ----
       # NDK：解压后的 ~3GB 目录跨包/跨构建复用，省去每次 1.2GB 下载 + 解压；
@@ -123,8 +227,7 @@ jobs:
         continue-on-error: true
         with:
           path: /opt/android-ndk
-          key: android-ndk-${{ steps.conf.outputs.ndk_version }}
-          restore-keys: android-ndk-
+          key: android-ndk-${{ steps.conf.outputs.ndk_version }}-${{ steps.conf.outputs.ndk_sha1 }}
 
       # cargo registry/git + 源码下载缓存（SRCDEST）：内容寻址的只读资源
       # （crate 源码、上游 tarball/git 副本），共享不会污染——与 NDK 同类，
@@ -142,9 +245,11 @@ jobs:
       # ---- 包缓存：按包完全隔离，只缓存本包编译产物 ----
       # 编译缓存目录 = 包目录下 cache_dirs 声明的相对路径（Rust 约定 target/）；
       # src/（解压的源码现场）不缓存——每次由 makepkg 从 SRCDEST 重新获取，
-      # 杜绝“源码与中间产物混杂的大杂烩缓存”。
+      # 杜绝"源码与中间产物混杂的大杂烩缓存"。
       # key 受：包名 + PKGBUILD + build.conf + 工具链版本(NDK) + 架构 影响；
-      # 锁文件在源码内（git tag 固定），pkgver 升级时已被 PKGBUILD 哈希覆盖
+      # 锁文件在源码内（git tag 固定），pkgver 升级时已被 PKGBUILD 哈希覆盖。
+      # 注意：restore-keys 意味着改 PKGBUILD 后会命中上一次的 target/ 做**增量**
+      # 重编（cargo 只重编变化的 crate），不是全量重编——这是有意为之。
       - name: 恢复包构建缓存
         uses: actions/cache@v5
         continue-on-error: true
@@ -155,35 +260,68 @@ jobs:
             build-${{ matrix.pkg }}-
 
       # 工具链准备逻辑集中在脚本（.github/scripts/prepare-toolchain.sh），
-      # 便于本地复现/测试；声明式字段见 build.conf
+      # 便于本地复现/测试；声明式字段见 build.conf。
+      # build.conf 的解析结果已由上一步写进 GITHUB_ENV 注入本步环境。
       - name: 准备工具链（按包声明，通用）
-        run: bash .github/scripts/prepare-toolchain.sh "pkgs/${{ matrix.pkg }}"
+        run: bash .github/scripts/prepare-toolchain.sh "pkgs/$PKG"
 
       - name: 构建 ${{ matrix.pkg }}
+        env:
+          # 同样只走 env，不在 run: 里展开 ${{ }}
+          MAKEPKG_FLAGS: ${{ steps.conf.outputs.makepkg_flags }}
+          EXTRA_ARTIFACTS: ${{ steps.conf.outputs.extra_artifacts }}
+          NDK_PLATFORM: ${{ steps.conf.outputs.ndk_platform }}
         run: |
-          set -e
-          d="pkgs/${{ matrix.pkg }}"
+          set -euo pipefail
+          d="pkgs/$PKG"
           # 缓存以 root 恢复，先归还给 builder（读写都需要）
-          chown -R builder:builder "$d" /home/builder/.cargo /opt/cache/sources 2>/dev/null || true
-          echo "::group::构建 ${{ matrix.pkg }}"
-          (cd "$d" && sudo -u builder makepkg -sf --noconfirm)
+          chown -R builder:builder "$d" /home/builder/.cargo /opt/cache/sources
+          echo "::group::构建 $PKG"
+          # makepkg 额外参数（如 rtk-termux 交叉编译需要 --ignorearch）
+          read -r -a FLAGS <<< "$MAKEPKG_FLAGS"
+          (cd "$d" && sudo -u builder env NDK_PLATFORM="$NDK_PLATFORM" makepkg -sf --noconfirm ${FLAGS[@]+"${FLAGS[@]}"})
           # 产物改用 .pacman 扩展名（与 fpm/tauri/electron-builder 约定一致），
           # 本质仍为标准 pacman 包，pacman -U 可直接安装
+          shopt -s nullglob
           for f in "$d"/*.pkg.tar.zst; do
-            [ -f "$f" ] && mv "$f" "${f%.pkg.tar.zst}.pacman"
+            mv "$f" "${f%.pkg.tar.zst}.pacman"
           done
           # 收集 build.conf 声明的额外产物（如 rtk-aarch64-android）供上传
-          EXTRA="${{ steps.conf.outputs.extra_artifacts }}"
-          if [ -n "$EXTRA" ]; then
+          if [ -n "$EXTRA_ARTIFACTS" ]; then
             mkdir -p "$d/extra_artifacts"
-            for f in $EXTRA; do
+            # shellcheck disable=SC2086  # 需要按空格拆分成多个文件名
+            for f in $EXTRA_ARTIFACTS; do
               if [ -f "$d/$f" ]; then
                 cp -f "$d/$f" "$d/extra_artifacts/"
               else
-                echo "::warning::声明了额外产物 $f 但构建后不存在"
+                echo "::error::声明了额外产物 $f 但构建后不存在"
+                exit 1
               fi
             done
           fi
+          echo "::endgroup::"
+
+      # 构建成功不等于包可用：把元信息打进日志，并跑一遍 namcap。
+      # 交叉编译的包（如 rtk-termux）会出现预期的架构相关告警，故不作失败判据。
+      - name: 校验产物
+        run: |
+          set -euo pipefail
+          d="pkgs/$PKG"
+          shopt -s nullglob
+          files=("$d"/*.pacman)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::没有生成 .pacman 包产物"
+            exit 1
+          fi
+          echo "::group::产物元信息 $PKG"
+          for f in "${files[@]}"; do
+            ls -lh "$f"
+            pacman -Qip "$f"
+          done
+          echo "::endgroup::"
+          pacman -S --needed --noconfirm namcap
+          echo "::group::namcap $PKG"
+          namcap "${files[@]}"
           echo "::endgroup::"
 
       - name: 上传单包产物
@@ -202,6 +340,7 @@ jobs:
     needs: build
     if: needs.build.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/download-artifact@v5
         with:

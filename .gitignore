@@ -1,7 +1,18 @@
+# 构建产物
 *.pkg.tar.zst
 *.pkg.tar.xz
 *.pacman
+
+# makepkg 工作目录
 src/
 pkg/
 target/
 .deps/
+
+# PKGBUILD 额外吐出的裸二进制（见 build.conf 的 extra_artifacts）
+# 以及工作流收集它们时用到的临时目录
+pkgs/*/extra_artifacts/
+pkgs/*/rtk-aarch64-android
+
+# 本地工具目录
+.workbuddy-ai/

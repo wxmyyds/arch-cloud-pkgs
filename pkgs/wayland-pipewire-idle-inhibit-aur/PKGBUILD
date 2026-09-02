@@ -1,6 +1,7 @@
 # Maintainer: wxmyyds <wxmyyds0601@163.com>
 # 云端构建版 wayland-pipewire-idle-inhibit：锁定上游 tag，本机零编译
-# 升级方法：改 pkgver 为上游新版本号，sha256sums 保持 SKIP（git tag 源）
+# 升级方法：改 pkgver 为上游新版本号，并用下面这条命令取新 tarball 的校验和
+#          curl -sL <tarball url> | sha256sum
 # 注意：包名带 -aur 后缀以避免工作流 *.pkg.tar.zst 产物循环匹配；
 #       运行时包名/二进制不变（provides 原名）
 
@@ -18,7 +19,9 @@ makedepends=('rust' 'clang' 'wayland' 'wayland-protocols')
 provides=("${_pkgname}")
 conflicts=("${_pkgname}")
 source=("${_pkgname}-${pkgver}.tar.gz::https://github.com/rafaelrc7/${_pkgname}/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('SKIP')
+# 固定校验和：tarball 源不像 git tag 那样自带版本锚点，SKIP 会让上游移动 tag
+# 或仓库被接管时完全不可察觉
+sha256sums=('6644562aa9ac0210ae7203453f7d3d38fe9d74059e0864d60e13b45033dc2652')
 
 # 关键：关闭 debug 包生成（否则 makepkg 自动产出 -debug 包）
 # + cargo release 二进制默认带完整 debug 符号（~700MB），

@@ -5,32 +5,42 @@
 _pkgname=we-layerd
 pkgname=$_pkgname
 pkgver=0.2.7
-pkgrel=2
+# 3: 补 we-gui.desktop、修正运行时依赖（libdrm/libva/gst-plugins-bad-libs）、
+#    许可证改为 custom:unlicensed
+pkgrel=3
 pkgdesc="A native Wallpaper Engine runtime for Linux Wayland (niri/Hyprland/KDE/GNOME)"
 arch=('x86_64')
 url="https://github.com/Aromatic05/we-layerd"
-license=('MIT')
+# 上游 v0.2.7 仓库内不含任何 LICENSE/COPYING 文件，官方 PKGBUILD 亦声明为
+# custom:unlicensed——此处不得写成 MIT
+license=('custom:unlicensed')
+# 依赖清单对齐上游 package/archlinux/PKGBUILD
 depends=(
-    'gtk3'
-    'wayland'
-    'libxkbcommon'
-    'vulkan-icd-loader'
-    'libglvnd'
-    'mesa'
+    'cef'
+    'directx-shader-compiler'
+    'fontconfig'
+    'freetype2'
     'gstreamer'
-    'gst-plugins-base-libs'
     'gst-libav'
+    # renderer .so 是 dlopen 加载的，符号到运行时才解析。放进 makedepends 会导致
+    # 构建全绿但装完启动即失败——必须留在运行时依赖
+    'gst-plugins-bad-libs'
+    'gst-plugins-base-libs'
     # 视频壁纸需要完整插件集（qtdemux 等解封装器）
     'gst-plugins-base'
     'gst-plugins-good'
+    'gtk3'
+    # DMA-BUF 零拷贝路径 + VA-API 硬件解码，两者官方均列为 depends
+    'libdrm'
+    'libglvnd'
+    'libva'
+    'libxkbcommon'
     'lz4'
+    'mesa'
     'pango'
-    'fontconfig'
-    'freetype2'
+    'vulkan-icd-loader'
+    'wayland'
     'xdotool'
-    # 运行时必需：renderer 链接受 libdxcompiler.so，web helper 受 libcef.so
-    'cef'
-    'directx-shader-compiler'
     # we-gui 系统托盘图标
     'libayatana-appindicator'
 )
@@ -41,12 +51,7 @@ makedepends=(
     'pkgconf'
     'wayland-protocols'
     'vulkan-headers'
-    'gstreamer'
-    'gst-plugins-bad-libs'
-    'gst-plugins-good'
 )
-provides=("we-layerd")
-conflicts=("we-layerd")
 source=("$_pkgname::git+https://github.com/Aromatic05/we-layerd.git#tag=v$pkgver")
 sha256sums=('SKIP')
 
@@ -63,7 +68,9 @@ prepare() {
 build() {
     cd "$_pkgname"
     # 编译缓存与源码分离：统一放 $startdir/target（包目录），由工作流按包缓存；
-    # 但上游 xtask install 硬编码读源码目录下 target/...，用符号链接桥接
+    # 但上游 xtask install 硬编码读源码目录下 target/...，用符号链接桥接。
+    # 注意：package() 里 xtask 会再跑一次 cargo build，靠这个链接 + 上面导出的
+    # CARGO_TARGET_DIR 落到同一目录才能命中缓存，改动此处会导致二次全量编译。
     rm -rf target
     ln -sfn "$startdir/target" target
     export CARGO_TARGET_DIR="$startdir/target"
@@ -73,6 +80,11 @@ build() {
 package() {
     cd "$_pkgname"
     DESTDIR="$pkgdir" cargo xtask install --prefix /usr
+    # xtask install 的产物只有 we-layerd / we-gui / renderer.so / we-cef-helper /
+    # GNOME 扩展，不含 .desktop。不补这一步 we-gui 不会出现在任何应用启动器里
+    # （上游官方 PKGBUILD 是手工 install 的这一项）
+    install -Dm644 apps/we-gui/assets/we-gui.desktop \
+        "$pkgdir/usr/share/applications/we-gui.desktop"
     # 显式 strip 所有可执行文件/共享库（renderer 是 dlopen 的 .so，strip 不影响加载）
     find "$pkgdir" -type f \( -perm -111 -o -name '*.so*' \) -print0 | while IFS= read -r -d '' f; do
         strip --strip-unneeded "$f" 2>/dev/null || true
