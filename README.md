@@ -16,7 +16,7 @@
 1. 推送代码后自动触发；或到 **Actions → Build packages → Run workflow** 手动触发
 2. 另外每月 1 号会定时全量重建一次（Arch 滚动更新，glibc/gcc-libs 的 soname bump 会让旧包静默失效）
 3. 等待构建完成（见下方"构建加速"）
-4. 到该次运行页面底部下载 artifact `arch-packages`（合并产物）；若某个包构建失败，其余成功的包可从 `arch-packages-<包名>` 单独下载
+4. 到该次运行页面底部下载对应包的 artifact `arch-packages-<包名>`；每个包单独一个文件，互不影响
 
 > 产物保留 30 天（`retention-days: 30`），过期即不可下载。需要长期留存的请配合三期 Roadmap 的私人仓库。
 
@@ -52,7 +52,7 @@ sudo pacman -U *.pacman
 ## 构建加速
 
 - **只构建变更的包**：push 时按 diff 选出改动涉及的包，也可手动指定单个包
-- **并行构建**：多个包同时变更时，每个包一个独立 job（matrix）并行执行，互不影响
+- **并行构建**：多个包同时变更时，每个包一个独立 job（matrix）并行执行，互不影响；产物也按包分别上传
 - **缓存分层**：
   - 工具链层（跨包共享）：NDK、cargo registry/git、`SRCDEST` 源码下载副本——都是内容寻址的只读资源
   - 包层（按包隔离）：`cache_dirs` 声明的编译目录（Rust 约定 `target/`），key 含包名 + PKGBUILD + build.conf + NDK 版本 + 架构

@@ -333,22 +333,3 @@ jobs:
             pkgs/${{ matrix.pkg }}/extra_artifacts/*
           retention-days: 30
           if-no-files-found: error
-
-  # ---- 合并 job：把所有单包产物合并成一个 arch-packages，保持原有下载习惯；
-  #      任一包失败时跳过合并（成功的包仍可从 arch-packages-<包名> 下载）
-  merge:
-    needs: build
-    if: needs.build.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/download-artifact@v5
-        with:
-          pattern: arch-packages-*
-          merge-multiple: true
-          path: merged
-      - uses: actions/upload-artifact@v5
-        with:
-          name: arch-packages
-          path: merged
-          retention-days: 30
