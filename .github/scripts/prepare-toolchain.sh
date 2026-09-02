@@ -149,7 +149,7 @@ if [ -n "${rust_targets:-}" ]; then
   chown -R builder:builder "$RUSTUP_HOME" "$CARGO_HOME"
 fi
 
-# --- 4. cargo-ndk（Android 包的主构建路径；装不上时 PKGBUILD 内 fallback 纯 cargo）---
+# --- 4. cargo-ndk（Android 包的必需构建工具）---
 if [ "${needs_cargo_ndk:-false}" = "true" ]; then
   # 缓存恢复的 registry 以 root 落地，先归还 builder 再安装（builder 的 cargo 才被 makepkg 用到）
   chown -R builder:builder "$CARGO_HOME"
@@ -165,7 +165,9 @@ if [ "${needs_cargo_ndk:-false}" = "true" ]; then
       cp -f "$CARGO_HOME/bin/cargo-ndk" /usr/local/bin/cargo-ndk
     fi
   fi
-  cargo-ndk --version
+  # cargo-ndk 是 Cargo 子命令，直接执行 cargo-ndk 会主动报错：
+  # "This binary may only be called via cargo ndk"。
+  cargo ndk --version
 fi
 
 echo "::endgroup::"
