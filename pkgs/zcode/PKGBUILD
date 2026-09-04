@@ -50,7 +50,7 @@ license=('LicenseRef-Proprietary')
 depends=('alsa-lib' 'at-spi2-core' 'cairo' 'dbus' 'expat' 'glib2' 'gtk3'
          'hicolor-icon-theme' 'libcups' 'libnotify' 'libx11' 'libxcb'
          'libxcomposite' 'libxdamage' 'libxext' 'libxfixes' 'libxkbcommon'
-         'libxrandr' 'libxss' 'libxtst' 'mesa' 'nss' 'pango')
+         'libxrandr' 'libxss' 'libxtst' 'mesa' 'nss' 'pango' 'python')
 source=("ZCode-${pkgver}-linux-x64.AppImage::https://cdn-zcode.z.ai/zcode/electron/releases/${pkgver}/linux-x64/ZCode-${pkgver}-linux-x64.AppImage")
 # 浮动版本：无法预钉哈希，见文件头说明
 sha256sums=('SKIP')
