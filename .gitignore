@@ -16,3 +16,4 @@ pkgs/*/rtk-aarch64-android
 
 # 本地工具目录
 .workbuddy-ai/
+.zcode/

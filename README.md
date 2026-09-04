@@ -9,6 +9,7 @@
 | [we-layerd](https://github.com/Aromatic05/we-layerd) | v0.2.7 | 原生 Wallpaper Engine 运行时（scene/video/web，支持 niri）|
 | [wayland-pipewire-idle-inhibit-aur](https://github.com/rafaelrc7/wayland-pipewire-idle-inhibit) | v0.7.1 | 播放声音时抑制 Wayland idle（包名带 `-aur` 后缀以避免产物匹配问题，`provides` 原包名）|
 | [rtk-termux](https://github.com/rtk-ai/rtk) | v0.47.0 | 交叉编译的 Termux aarch64 版（上游只发 gnu/musl 预编译，没有 Bionic）。**不要在本机 Arch 上安装**，见下 |
+| [zcode](https://zcode.z.ai) | 官网 latest（构建时解析） | Z.ai 官方 Electron 桌面应用重打包（AppImage → 原生包）。版本自动跟最新：上游发版**无需改文件**，定时重建或手动触发即取当时最新 |
 
 ## 使用方法
 
@@ -45,6 +46,9 @@ sudo pacman -U *.pacman
   curl -sL <tarball url> | sha256sum
   ```
 - 源是 git tag 的包（`we-layerd`）保持 `SKIP`。
+- `zcode` 不需要"升级"：`pkgver` 在构建时从官网安装文档页解析最新版（解析失败会
+  直接报错终止，不会打出错误版本）。它是唯一用 `SKIP` 的 tarball 源——浮动版本
+  无法预钉哈希，完整性由 `prepare()` 的体积下限 + AppImage 魔数校验兜底。
 
 改了 `pkgver` 就属于改了 PKGBUILD，缓存 key 随之变化；但由于配了 `restore-keys`，
 会命中上一次的 `target/` 做**增量**重编（cargo 只重编变化的 crate），不是全量重编。

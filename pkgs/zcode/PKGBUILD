@@ -1,0 +1,121 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# 云端构建版 zcode：智谱官网只分发 Electron 桌面应用（AppImage/deb/rpm，无源码、
+# 无 CLI 单独分发），本包把 x64 AppImage 重打包成原生 pacman 包，本机零编译。
+# 升级方法：无需升级——pkgver 在构建时自动解析官网最新版，上游发新版后
+#          每月 1 号的定时全量重建、或手动 workflow_dispatch 指定 zcode 即可。
+#
+# 版本解析原理：官网安装文档页 https://zcode.z.ai/en/docs/install 内嵌带版本号的
+# CDN 下载直链，从中提取版本号。CDN 没有 latest-linux.yml 之类的更新源文件
+# （已探测，应用内置 app-update.yml 也是 localhost 占位符），文档页是唯一官方来源。
+# 页面改版导致解析失败时，构建会在最开头报错终止，不会打出错误版本的包。
+#
+# sha256sums 用 SKIP 是仓库"tarball 源必钉 sha256"规则的唯一豁免：浮动版本无法
+# 预钉哈希。完整性由 prepare() 的体积下限 + AppImage 魔数校验兜底——版本解析错、
+# CDN 返回 404 页时在这里就会被拦下，不会把网页当二进制打进包里。
+
+pkgname=zcode
+pkgrel=1
+
+# ---- 构建时解析官网最新版（curl 随 pacman 必装，容器内无需 makedepends）----
+_zcode_latest() {
+    local page ver
+    for page in 'https://zcode.z.ai/en/docs/install' 'https://zcode.z.ai/zh/docs/install'; do
+        ver="$(curl -fsSL --max-time 30 --retry 2 "$page" 2>/dev/null \
+            | grep -om1 'releases/[0-9.]\+/linux-x64/ZCode-[0-9.]\+-linux-x64\.AppImage' \
+            | sed -E 's|releases/([0-9.]+)/.*|\1|')"
+        if [[ -n "$ver" ]]; then
+            printf '%s\n' "$ver"
+            return 0
+        fi
+    done
+    return 1
+}
+
+pkgver="$(_zcode_latest)" || {
+    echo >&2 "!! 无法从官网安装文档页解析 ZCode 最新版本号，页面结构可能已改版"
+    exit 1
+}
+[[ "$pkgver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo >&2 "!! 解析出版本号异常：${pkgver:-（空）}"
+    exit 1
+}
+
+pkgdesc="Z.ai 官方 ZCode 桌面应用（GLM 编码助手，Electron）"
+arch=('x86_64')
+url="https://zcode.z.ai"
+license=('LicenseRef-Proprietary')
+# 对应 zcode 主程序直接 NEEDED 的系统库（ldd 实测）；atk/atspi 归 at-spi2-core，
+# 其余 X 库为显式声明防最小化环境缺库。libgconf/libappindicator 等 Arch 已移除的库
+# 不声明也不需要：AppImage 自带副本，由 /usr/bin/zcode 包装脚本注入 LD_LIBRARY_PATH
+depends=('alsa-lib' 'at-spi2-core' 'cairo' 'dbus' 'expat' 'glib2' 'gtk3'
+         'hicolor-icon-theme' 'libcups' 'libgbm' 'libnotify' 'libx11' 'libxcb'
+         'libxcomposite' 'libxdamage' 'libxext' 'libxfixes' 'libxkbcommon'
+         'libxrandr' 'libxss' 'libxtst' 'nss' 'pango')
+source=("ZCode-${pkgver}-linux-x64.AppImage::https://cdn-zcode.z.ai/zcode/electron/releases/${pkgver}/linux-x64/ZCode-${pkgver}-linux-x64.AppImage")
+# 浮动版本：无法预钉哈希，见文件头说明
+sha256sums=('SKIP')
+
+# 预编译产物：不重复 strip（603MB Electron 产物，strip 有损坏风险且收益近零），
+# 关 debug 分包与空目录
+options=('!strip' '!debug' '!emptydirs')
+
+prepare() {
+    cd "$srcdir"
+    local img="ZCode-${pkgver}-linux-x64.AppImage"
+
+    # 浮动版本的完整性兜底：真 AppImage 是 type-2 格式（偏移 8 处 'AI\x02' 魔数）
+    # 且体积数百 MB；拿到 404 页/错误页时这里直接失败
+    if [[ $(stat -c%s "$img") -lt 52428800 ]]; then
+        echo >&2 "!! ${img} 体积异常，疑似非 AppImage"
+        return 1
+    fi
+    if [[ $(dd if="$img" bs=1 skip=8 count=2 2>/dev/null) != 'AI' ]]; then
+        echo >&2 "!! AppImage type-2 魔数校验失败"
+        return 1
+    fi
+
+    chmod +x "$img"
+    # --appimage-extract 是 AppImage 内置功能，纯解包不挂载，CI 容器无 FUSE 也能跑
+    ./"$img" --appimage-extract > /dev/null
+}
+
+package() {
+    cd "$srcdir/squashfs-root"
+    local dest="${pkgdir}/opt/${pkgname}"
+
+    # 运行时文件整体进 /opt/zcode：主程序 RPATH=$ORIGIN，同级 .so、resources、
+    # 捆绑的 usr/lib 副本按相对路径解析，目录结构必须原样保留
+    install -d "${dest}"
+    cp -a ./ "${dest}/"
+    rm -f "${dest}/AppRun" "${dest}/.DirIcon"
+    # 上游 electron 产物即此权限；wrapper 默认带 --no-sandbox 用不到它，
+    # 保留供手动开启沙箱时使用
+    chmod 4755 "${dest}/chrome-sandbox"
+
+    # 复刻 AppRun 的关键环境：捆绑库优先。libgconf-2/libappindicator 等已从
+    # Arch 仓库移除，只能靠 AppImage 捆绑副本；--no-sandbox 沿用上游 desktop
+    # 文件的原配置，保证任何内核配置下都能启动
+    install -Dm755 /dev/null "${pkgdir}/usr/bin/zcode"
+    cat > "${pkgdir}/usr/bin/zcode" <<'EOF'
+#!/bin/sh
+exec env LD_LIBRARY_PATH="/opt/zcode/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" /opt/zcode/zcode --no-sandbox "$@"
+EOF
+
+    # .desktop：Exec 改指包装脚本、去掉 AppImage 专属字段；
+    # sed 落空则报错，防止静默打出桌面项损坏的包
+    install -d "${pkgdir}/usr/share/applications"
+    sed -e 's|^Exec=AppRun .*|Exec=/usr/bin/zcode %U|' \
+        -e '/^X-AppImage-Version=/d' \
+        zcode.desktop > "${pkgdir}/usr/share/applications/zcode.desktop"
+    if ! grep -q '^Exec=/usr/bin/zcode %U$' "${pkgdir}/usr/share/applications/zcode.desktop"; then
+        echo >&2 "!! zcode.desktop Exec 改写失败，上游 desktop 文件结构可能已变化"
+        return 1
+    fi
+
+    # hicolor 全套图标（16~1024，desktop 的 Icon=zcode 按名查找）
+    cp -a usr/share/icons "${pkgdir}/usr/share/"
+
+    # Electron/Chromium 组件许可证
+    install -Dm644 -t "${pkgdir}/usr/share/licenses/${pkgname}/" \
+        LICENSE.electron.txt LICENSES.chromium.html
+}
