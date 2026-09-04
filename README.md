@@ -9,7 +9,7 @@
 | [we-layerd](https://github.com/Aromatic05/we-layerd) | v0.2.7 | 原生 Wallpaper Engine 运行时（scene/video/web，支持 niri）|
 | [wayland-pipewire-idle-inhibit-aur](https://github.com/rafaelrc7/wayland-pipewire-idle-inhibit) | v0.7.1 | 播放声音时抑制 Wayland idle（包名带 `-aur` 后缀以避免产物匹配问题，`provides` 原包名）|
 | [rtk-termux](https://github.com/rtk-ai/rtk) | v0.47.0 | 交叉编译的 Termux aarch64 版（上游只发 gnu/musl 预编译，没有 Bionic）。**不要在本机 Arch 上安装**，见下 |
-| [zcode](https://zcode.z.ai) | 官网 latest（构建时解析） | Z.ai 官方 Electron 桌面应用重打包（AppImage → 原生包）。版本自动跟最新：上游发版**无需改文件**，定时重建或手动触发即取当时最新 |
+| [zcode](https://zcode.z.ai) | 官网 latest（构建时解析） | Z.ai 官方 Electron 桌面应用重打包（AppImage → 原生包）。版本自动跟最新：上游发版**无需改文件**，定时重建或手动触发即取当时最新。与 AUR `z-code-bin` 互为冲突，安装时 pacman 会提示替换 |
 
 ## 使用方法
 

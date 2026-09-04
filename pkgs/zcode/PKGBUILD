@@ -51,6 +51,9 @@ depends=('alsa-lib' 'at-spi2-core' 'cairo' 'dbus' 'expat' 'glib2' 'gtk3'
          'hicolor-icon-theme' 'libcups' 'libnotify' 'libx11' 'libxcb'
          'libxcomposite' 'libxdamage' 'libxext' 'libxfixes' 'libxkbcommon'
          'libxrandr' 'libxss' 'libxtst' 'mesa' 'nss' 'pango' 'python')
+# AUR z-code-bin 是同一应用的另一个打包（/opt/ZCode 大写 Z），且它声明了
+# conflicts=(zcode)；这里对称声明，保证任一边安装时 pacman 都能正确要求移除对方
+conflicts=('z-code-bin' 'zcode-bin' 'zcode-desktop-bin')
 source=("ZCode-${pkgver}-linux-x64.AppImage::https://cdn-zcode.z.ai/zcode/electron/releases/${pkgver}/linux-x64/ZCode-${pkgver}-linux-x64.AppImage")
 # 浮动版本：无法预钉哈希，见文件头说明
 sha256sums=('SKIP')
