@@ -63,10 +63,18 @@ prepare() {
     cd "$srcdir"
     local img="ZCode-${pkgver}-linux-x64.AppImage"
 
+    # -f 跟随符号链接：$srcdir 下是 SRCDEST 的链接，确认真实文件已落盘
+    if ! [[ -f $img ]]; then
+        echo >&2 "!! 源文件 $img 缺失，下载未落盘"
+        return 1
+    fi
     # 浮动版本的完整性兜底：真 AppImage 是 type-2 格式（偏移 8 处 'AI\x02' 魔数）
-    # 且体积数百 MB；拿到 404 页/错误页时这里直接失败
-    if [[ $(stat -c%s "$img") -lt 52428800 ]]; then
-        echo >&2 "!! ${img} 体积异常，疑似非 AppImage"
+    # 且体积数百 MB；拿到 404 页/错误页时这里直接失败。
+    # 注意 stat 默认不跟随符号链接（%s 读到的是 $srcdir 链接本身的字节数），必须 -L
+    local size
+    size="$(stat -L -c%s "$img")"
+    if (( size < 52428800 )); then
+        echo >&2 "!! ${img} 体积异常（${size} 字节），疑似非 AppImage"
         return 1
     fi
     if [[ $(dd if="$img" bs=1 skip=8 count=2 2>/dev/null) != 'AI' ]]; then
