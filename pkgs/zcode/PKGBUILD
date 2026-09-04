@@ -14,7 +14,7 @@
 # CDN 返回 404 页时在这里就会被拦下，不会把网页当二进制打进包里。
 
 pkgname=zcode
-pkgrel=1
+pkgrel=2
 
 # ---- 构建时解析官网最新版（curl 随 pacman 必装，容器内无需 makedepends）----
 _zcode_latest() {
@@ -99,9 +99,11 @@ package() {
     install -d "${dest}"
     cp -a ./ "${dest}/"
     rm -f "${dest}/AppRun" "${dest}/.DirIcon"
-    # 上游 electron 产物即此权限；wrapper 默认带 --no-sandbox 用不到它，
-    # 保留供手动开启沙箱时使用
-    chmod 4755 "${dest}/chrome-sandbox"
+    # AppImage 解包出的目录是 700（electron-builder AppDir 的已知问题），pacman 会
+    # 原样创建成 root:root 700，非 root 无法遍历导致应用无法启动——目录统一 755
+    find "${dest}" -type d -exec chmod 755 {} +
+    # wrapper 走 --no-sandbox，用不到 suid sandbox；显式 755 保持常规权限
+    chmod 755 "${dest}/chrome-sandbox"
 
     # 复刻 AppRun 的关键环境：捆绑库优先。libgconf-2/libappindicator 等已从
     # Arch 仓库移除，只能靠 AppImage 捆绑副本；--no-sandbox 沿用上游 desktop
@@ -125,6 +127,9 @@ EOF
 
     # hicolor 全套图标（16~1024，desktop 的 Icon=zcode 按名查找）
     cp -a usr/share/icons "${pkgdir}/usr/share/"
+    # 同样归一化权限：目录 755、图标文件 644（700 会让其他用户读不到图标）
+    find "${pkgdir}/usr/share/icons" -type d -exec chmod 755 {} +
+    find "${pkgdir}/usr/share/icons" -type f -exec chmod 644 {} +
 
     # Electron/Chromium 组件许可证
     install -Dm644 -t "${pkgdir}/usr/share/licenses/${pkgname}/" \
