@@ -48,9 +48,9 @@ license=('LicenseRef-Proprietary')
 # 其余 X 库为显式声明防最小化环境缺库。libgconf/libappindicator 等 Arch 已移除的库
 # 不声明也不需要：AppImage 自带副本，由 /usr/bin/zcode 包装脚本注入 LD_LIBRARY_PATH
 depends=('alsa-lib' 'at-spi2-core' 'cairo' 'dbus' 'expat' 'glib2' 'gtk3'
-         'hicolor-icon-theme' 'libcups' 'libgbm' 'libnotify' 'libx11' 'libxcb'
+         'hicolor-icon-theme' 'libcups' 'libnotify' 'libx11' 'libxcb'
          'libxcomposite' 'libxdamage' 'libxext' 'libxfixes' 'libxkbcommon'
-         'libxrandr' 'libxss' 'libxtst' 'nss' 'pango')
+         'libxrandr' 'libxss' 'libxtst' 'mesa' 'nss' 'pango')
 source=("ZCode-${pkgver}-linux-x64.AppImage::https://cdn-zcode.z.ai/zcode/electron/releases/${pkgver}/linux-x64/ZCode-${pkgver}-linux-x64.AppImage")
 # 浮动版本：无法预钉哈希，见文件头说明
 sha256sums=('SKIP')
