@@ -1,0 +1,159 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# 云端构建版微信 Linux：腾讯官方 x86_64 AppImage 重打包为 Arch 包。
+# 升级方法：无需修改 pkgver；构建时从官网解析当前版本。每月定时重建或手动
+#          workflow_dispatch 指定 wechat 即可获取官网当时的最新版。
+#
+# 官网目前只提供固定下载地址，页面未提供可用于 PKGBUILD 的 SHA-256 校验值。
+# 因此 sha256sums 使用 SKIP，prepare() 额外检查文件体积、AppImage type-2 魔数、
+# SHA-256（写入日志供审计）和解包结果；这些检查不能替代官方签名或固定哈希。
+
+pkgname=wechat
+pkgrel=1
+
+_wechat_latest() {
+    local page ver
+
+    page="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+        'https://linux.weixin.qq.com/')" || return 1
+
+    # 版本号绑定官网服务端渲染的主版本区域，不从 ARM 区域或页面任意数字取值。
+    ver="$(printf '%s\n' "$page" \
+        | grep -om1 'main-section__bd-version[^>]*>[0-9][0-9.]*</div>' \
+        | sed -E 's/.*>([0-9]+(\.[0-9]+)+)<\/div>/\1/')"
+    [[ -n "$ver" ]] || return 1
+
+    # 页面必须同时仍然公开 x86_64 AppImage；否则宁可失败，不下载错误平台。
+    grep -Fq 'https://dldir1v6.qq.com/weixin/Universal/Linux/WeChatLinux_x86_64.AppImage' <<< "$page" || return 1
+    printf '%s\n' "$ver"
+}
+
+pkgver="$(_wechat_latest)" || {
+    echo >&2 "!! 无法从微信 Linux 官网解析 x86_64 版本号，页面结构可能已改版"
+    exit 1
+}
+[[ "$pkgver" =~ ^[0-9]+(\.[0-9]+)+$ ]] || {
+    echo >&2 "!! 解析出版本号异常：${pkgver:-（空）}"
+    exit 1
+}
+
+pkgdesc="腾讯官方微信 Linux 桌面客户端（x86_64 AppImage 重打包）"
+arch=('x86_64')
+url="https://linux.weixin.qq.com/"
+license=('LicenseRef-Proprietary')
+# AppImage 已内置 Qt/Chromium/VLC 等应用库；以下为主程序 ELF 直接使用或运行时
+# 由系统提供的图形、音频、DBus、字体和证书组件。libpulse 供内置 VLC 音频插件使用。
+depends=(
+    'alsa-lib'
+    'atk'
+    'at-spi2-core'
+    'cairo'
+    'cups'
+    'dbus'
+    'fontconfig'
+    'gcc-libs'
+    'glib2'
+    'glibc'
+    'libpulse'
+    'libx11'
+    'libxcb'
+    'libxcomposite'
+    'libxdamage'
+    'libxext'
+    'libxfixes'
+    'libxkbcommon'
+    'libxrandr'
+    'mesa'
+    'nspr'
+    'nss'
+    'pango'
+    'systemd-libs'
+    'wayland'
+)
+makedepends=('desktop-file-utils')
+
+_source_url='https://dldir1v6.qq.com/weixin/Universal/Linux/WeChatLinux_x86_64.AppImage'
+source=("WeChatLinux_x86_64-${pkgver}.AppImage::${_source_url}")
+sha256sums=('SKIP')
+
+# 这是已编译的 Electron/Chromium 类应用，禁止 strip/debug 分包；保留 AppImage
+# 内部的符号链接和相对目录结构，避免破坏 RPATH=$ORIGIN。
+options=('!strip' '!debug' '!emptydirs')
+
+prepare() {
+    cd "$srcdir"
+    local image="WeChatLinux_x86_64-${pkgver}.AppImage"
+
+    if [[ ! -f "$image" ]]; then
+        echo >&2 "!! 源文件 $image 缺失，下载未落盘"
+        return 1
+    fi
+
+    local size digest
+    size="$(stat -L -c%s "$image")"
+    if (( size < 52428800 )); then
+        echo >&2 "!! ${image} 体积异常（${size} 字节），疑似错误响应"
+        return 1
+    fi
+    # AppImage type 2 的 ELF runtime 后偏移 8 字节为 AI + 版本号 2。
+    if [[ "$(dd if="$image" bs=1 skip=8 count=3 2>/dev/null)" != $'AI\002' ]]; then
+        echo >&2 "!! AppImage type-2 魔数校验失败"
+        return 1
+    fi
+
+    digest="$(sha256sum "$image" | cut -d' ' -f1)"
+    printf '微信 AppImage: %s (%s bytes)\nSHA-256: %s\n' "$image" "$size" "$digest"
+
+    chmod +x "$image"
+    # --appimage-extract 只解包，不依赖 FUSE；GitHub Actions 容器无需挂载权限。
+    ./$image --appimage-extract > /dev/null
+
+    # 当前官方 AppImage 的真实布局：/opt/wechat 为程序目录，根目录提供
+    # wechat.desktop 与 wechat.png，AppRun 仅用于原始 AppImage 启动。
+    [[ -x "$srcdir/squashfs-root/opt/wechat/wechat" ]] || {
+        echo >&2 "!! 解包结果缺少 /opt/wechat/wechat 主程序"
+        return 1
+    }
+    [[ -f "$srcdir/squashfs-root/wechat.desktop" ]] || {
+        echo >&2 "!! 解包结果缺少 wechat.desktop"
+        return 1
+    }
+    [[ -f "$srcdir/squashfs-root/wechat.png" ]] || {
+        echo >&2 "!! 解包结果缺少 wechat.png 图标"
+        return 1
+    }
+}
+
+package() {
+    local root="$srcdir/squashfs-root"
+
+    # 程序内部通过 $ORIGIN 查找捆绑库，原样保留 /opt/wechat 的目录结构。
+    install -d "$pkgdir/opt/wechat"
+    cp -a "$root/opt/wechat/." "$pkgdir/opt/wechat/"
+    # cp -a 保留 AppImage 内部的执行位；只归一化目录权限，避免破坏
+    # crashpad_handler、插件和其他由上游标记为可执行的组件。
+    find "$pkgdir/opt/wechat" -type d -exec chmod 755 {} +
+    chmod 755 "$pkgdir/opt/wechat/wechat"
+
+    # 稳定入口：不调用原始 AppRun，直接执行实测主程序；其 ELF 使用 $ORIGIN
+    # RPATH/RUNPATH 查找同目录的内置库，不需要 FUSE 或 --no-sandbox。
+    # AppRun 仅负责定位 /usr/bin/wechat，直接调用主程序可避免重打包后的路径循环。
+    install -Dm755 /dev/null "$pkgdir/usr/bin/wechat"
+    cat > "$pkgdir/usr/bin/wechat" <<'EOF'
+#!/bin/sh
+cd /opt/wechat || exit 1
+exec /opt/wechat/wechat "$@"
+EOF
+
+    install -d "$pkgdir/usr/share/applications"
+    sed -e 's|^Exec=AppRun %U$|Exec=/usr/bin/wechat %U|' \
+        -e '/^X-AppImage-Version=/d' \
+        "$root/wechat.desktop" > "$pkgdir/usr/share/applications/wechat.desktop"
+    if ! grep -q '^Exec=/usr/bin/wechat %U$' "$pkgdir/usr/share/applications/wechat.desktop"; then
+        echo >&2 "!! wechat.desktop Exec 改写失败，上游文件结构可能已变化"
+        return 1
+    fi
+    desktop-file-validate "$pkgdir/usr/share/applications/wechat.desktop"
+
+    # AppImage 只提供一枚 1024x1024 PNG，安装到 pixmaps 后可由 Icon=wechat 查找。
+    install -Dm644 "$root/wechat.png" "$pkgdir/usr/share/pixmaps/wechat.png"
+}
