@@ -306,7 +306,6 @@ jobs:
           MAKEPKG_FLAGS: ${{ steps.conf.outputs.makepkg_flags }}
           EXTRA_ARTIFACTS: ${{ steps.conf.outputs.extra_artifacts }}
           NDK_PLATFORM: ${{ steps.conf.outputs.ndk_platform }}
-          NAMCAP_CHECK: ${{ steps.conf.outputs.namcap_check }}
         run: |
           set -euo pipefail
           d="pkgs/$PKG"
@@ -340,6 +339,8 @@ jobs:
       # 构建成功不等于包可用：把元信息打进日志，并跑一遍 namcap。
       # 交叉编译的包（如 rtk-termux）会出现预期的架构相关告警，故不作失败判据。
       - name: 校验产物
+        env:
+          NAMCAP_CHECK: ${{ steps.conf.outputs.namcap_check }}
         run: |
           set -euo pipefail
           d="pkgs/$PKG"
