@@ -8,6 +8,9 @@
 # SHA-256（写入日志供审计）和解包结果；这些检查不能替代官方签名或固定哈希。
 
 pkgname=wechat
+# 预编译 AppImage 包含大量内置 ELF；namcap 扫描约 327 MB 产物会严重拖慢 CI。
+# 工作流默认执行 namcap，仅此包显式关闭；该字段由 workflow 以纯文本方式读取，不会 source PKGBUILD。
+namcap_check=false
 pkgrel=1
 
 _wechat_latest() {

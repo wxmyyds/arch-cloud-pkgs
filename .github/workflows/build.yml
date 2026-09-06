@@ -136,10 +136,9 @@ jobs:
           # （makepkg -s 需要最新 DB）
           pacman -Syu --needed --noconfirm
 
-      # 读取包声明（build.conf），供缓存 key / 上传路径使用。
-      # 这里是 build.conf 的**唯一**解析点：解析结果同时写进 GITHUB_OUTPUT（给本
-      # job 后续步骤）和 GITHUB_ENV（给 prepare-toolchain.sh），保证两处看到的是
-      # 同一份值，不会出现"脚本和工作流各写一份默认值、改一处忘一处"。
+      # 读取包声明（build.conf + PKGBUILD），供缓存 key、上传路径和质量检查使用。
+      # build.conf 的配置值由这里统一解析；PKGBUILD 只读取受控的 namcap_check 字段，
+      # 不会 source PKGBUILD，避免执行仓库中的构建代码。
       - name: 读取构建声明 build.conf
         id: conf
         run: |
@@ -190,6 +189,42 @@ jobs:
           emit "makepkg_flags=${makepkg_flags:-}"
           emit "ndk_sha1=${ndk_sha1:-}"
           emit "ndk_platform=${ndk_platform:-}"
+
+          # PKGBUILD 中可选声明 namcap_check=false；默认 true。
+          # 只接受顶层的简单赋值，不执行 PKGBUILD，也不解析函数体内的 shell。
+          namcap_check=true
+          namcap_declarations=0
+          PKGBUILD="pkgs/$PKG/PKGBUILD"
+          if [ ! -f "$PKGBUILD" ]; then
+            echo "::error::未找到 $PKGBUILD"
+            exit 1
+          fi
+          while IFS= read -r line || [ -n "$line" ]; do
+            # checkout 通常使用 LF；同时去掉 CR，避免 Windows 换行导致值误判。
+            line="${line%$'\r'}"
+            trimmed="${line#"${line%%[![:space:]]*}"}"
+            case "$trimmed" in
+              namcap_check=*)
+                namcap_declarations=$((namcap_declarations + 1))
+                raw="${trimmed#namcap_check=}"
+                case "$raw" in
+                  true|false) value="$raw" ;;
+                  \"true\"|\"false\") value="${raw:1:${#raw}-2}" ;;
+                  \'true\'|\'false\') value="${raw:1:${#raw}-2}" ;;
+                  *)
+                    echo "::error::PKGBUILD 的 namcap_check 只能是 true 或 false: $line"
+                    exit 1
+                    ;;
+                esac
+                namcap_check="$value"
+                ;;
+            esac
+          done < "$PKGBUILD"
+          if [ "$namcap_declarations" -gt 1 ]; then
+            echo "::error::PKGBUILD 只能声明一次 namcap_check"
+            exit 1
+          fi
+          emit "namcap_check=$namcap_check"
 
           if [ "${needs_ndk:-false}" = "true" ]; then
             if [[ ! "${ndk_sha1:-}" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -271,6 +306,7 @@ jobs:
           MAKEPKG_FLAGS: ${{ steps.conf.outputs.makepkg_flags }}
           EXTRA_ARTIFACTS: ${{ steps.conf.outputs.extra_artifacts }}
           NDK_PLATFORM: ${{ steps.conf.outputs.ndk_platform }}
+          NAMCAP_CHECK: ${{ steps.conf.outputs.namcap_check }}
         run: |
           set -euo pipefail
           d="pkgs/$PKG"
@@ -331,16 +367,13 @@ jobs:
             file "$android_bin" | grep -Eiq 'aarch64|ARM aarch64|Android'
             echo "::endgroup::"
           fi
-          if [ "$PKG" = "wechat" ]; then
-            # 微信是约 327 MB 的预编译 AppImage 重打包，namcap 会递归分析
-            # 大量内置 Chromium/VLC ELF，实际运行耗时约 43 分钟；保留 pacman
-            # 元信息和上面的包专属检查，跳过对该类大型二进制包收益很低的扫描。
-            echo "跳过 wechat 的 namcap：大型预编译 AppImage 包"
-          else
+          if [ "$NAMCAP_CHECK" = "true" ]; then
             pacman -S --needed --noconfirm namcap
             echo "::group::namcap $PKG"
             namcap "${files[@]}"
             echo "::endgroup::"
+          else
+            echo "跳过 $PKG 的 namcap：PKGBUILD 声明 namcap_check=false"
           fi
 
       - name: 上传单包产物
