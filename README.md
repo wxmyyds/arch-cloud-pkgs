@@ -104,7 +104,7 @@ git add && git commit && git push   # 自动触发构建
 - 工作流里所有 GitHub 上下文都经 `env:` 传入，不在 `run:` 里直接写 `${{ }}`——
   后者是 shell 解析前的纯文本替换，`workflow_dispatch` 输入里带个分号就能执行任意命令
 - `build.conf` 只允许受控的变量赋值，工作流会校验包名、缓存路径、额外产物路径和 NDK 校验值；不要在配置中写 shell 表达式
-- 构建完成后会强制检查至少生成一个包，并执行 `pacman -Qip` 与 `namcap`；检查失败会阻止上传产物
+- 构建完成后会强制检查至少生成一个包，并执行 `pacman -Qip`；除大型预编译 AppImage 重打包的 `wechat` 外，其余包执行 `namcap`。检查失败会阻止上传产物
 
 ## Roadmap
 

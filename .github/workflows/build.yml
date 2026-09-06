@@ -331,10 +331,17 @@ jobs:
             file "$android_bin" | grep -Eiq 'aarch64|ARM aarch64|Android'
             echo "::endgroup::"
           fi
-          pacman -S --needed --noconfirm namcap
-          echo "::group::namcap $PKG"
-          namcap "${files[@]}"
-          echo "::endgroup::"
+          if [ "$PKG" = "wechat" ]; then
+            # 微信是约 327 MB 的预编译 AppImage 重打包，namcap 会递归分析
+            # 大量内置 Chromium/VLC ELF，实际运行耗时约 43 分钟；保留 pacman
+            # 元信息和上面的包专属检查，跳过对该类大型二进制包收益很低的扫描。
+            echo "跳过 wechat 的 namcap：大型预编译 AppImage 包"
+          else
+            pacman -S --needed --noconfirm namcap
+            echo "::group::namcap $PKG"
+            namcap "${files[@]}"
+            echo "::endgroup::"
+          fi
 
       - name: 上传单包产物
         uses: actions/upload-artifact@v5
