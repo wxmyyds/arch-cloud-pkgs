@@ -1,0 +1,60 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# 云端构建版 linux-id：TPM-backed FIDO2/CTAP2 虚拟安全密钥，本机零编译
+# 升级方法：改 pkgver 为上游新 tag，并更新下方三处 sha256sums
+#          （tarball 用 curl -sL <tarball url> | sha256sum 取值；
+#           service/rules 是本仓库内文件，改动后用 sha256sum 本地取值同步）
+# 注意：包内自带 systemd user 服务 + udev 规则，安装后需手动启动：
+#       systemctl --user enable --now linux-id.service
+
+pkgname=linux-id
+pkgver=0.2.3
+pkgrel=1
+pkgdesc="FIDO token implementation for Linux that protects the token keys using your system's TPM."
+arch=('x86_64')
+url="https://github.com/matejsmycka/linux-id"
+license=('MIT')
+# pinentry 是运行依赖：每次注册/登录都要靠它弹确认框（无指纹仪时必备）
+depends=('glibc' 'pinentry')
+makedepends=('go')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/matejsmycka/linux-id/archive/refs/tags/v$pkgver.tar.gz"
+        "$pkgname.service"
+        "$pkgname.rules")
+# tarball 哈希用实测值钉死：tarball 源不像 git tag 那样自带版本锚点，SKIP 会让
+# 上游移动 tag 或仓库被接管时完全不可察觉；
+# service/rules 是本仓库内文件，随包一起评审，改动后同步更新对应哈希
+sha256sums=('d0e1091e0951fa65451de52d6a79fd13c87b5da704273f6f6d1dcf71ed8e5862'
+            '74891b75cfbd8963c13369af16a11ee0fd997400051a84c3e525d5d4e56ab084'
+            '8a42f5924b06effb0620714db1313b385f821db0f324982e11ebd28feca9f1dd')
+
+# 关闭 debug 包生成（否则 makepkg 自动产出 -debug 包）；
+# Go release 二进制在 package() 里显式 strip 瘦身
+options=('!debug' '!emptydirs')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    export GOPATH="$srcdir"
+    go mod download -modcacherw
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export GOPATH="$srcdir"
+    export CGO_CPPFLAGS="${CPPFLAGS}"
+    export CGO_CFLAGS="${CFLAGS}"
+    export CGO_CXXFLAGS="${CXXFLAGS}"
+    export CGO_LDFLAGS="${LDFLAGS}"
+    export GOFLAGS="-buildmode=pie -mod=readonly -modcacherw"
+    go build -ldflags "-compressdwarf=false -linkmode external -bindnow" -o "$pkgname" .
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 "$pkgname" "$pkgdir/usr/bin/$pkgname"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "../$pkgname.service" "$pkgdir/usr/lib/systemd/user/$pkgname.service"
+    install -Dm644 "../$pkgname.rules" "$pkgdir/usr/lib/udev/rules.d/60-$pkgname-fido-tpm.rules"
+    # Go 二进制 strip 瘦身
+    strip --strip-unneeded "$pkgdir/usr/bin/$pkgname"
+    # 打印 strip 后大小便于日志确认
+    ls -lh "$pkgdir/usr/bin/$pkgname"
+}
