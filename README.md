@@ -12,6 +12,7 @@
 | [zcode](https://zcode.z.ai) | 官网 latest（构建时解析） | Z.ai 官方 Electron 桌面应用重打包（AppImage → 原生包）。版本自动跟最新：上游发版**无需改文件**，定时重建或手动触发即取当时最新。与 AUR `z-code-bin` 互为冲突，安装时 pacman 会提示替换 |
 | [linux-id](https://github.com/matejsmycka/linux-id) | v0.2.3 | TPM-backed FIDO2/CTAP2 虚拟安全密钥（uhid 模拟 USB HID，浏览器即插即用）。装完需手动启动服务，见下 |
 | [wechat](https://linux.weixin.qq.com/) | 官网 latest（构建时解析） | 腾讯官方微信 Linux x86_64 AppImage 重打包为原生包；仅支持 x86_64，版本自动跟随官网，ARM 版暂未接入 |
+| [dank-greeter](https://github.com/AvengeMedia/dank-greeter) | v1.6.2 | DMS Greeter 登录界面，重打包上游官方预编译 Go 单二进制（UI 内嵌，无 QML 树）。替代旧包名 `greetd-dms-greeter-bin`，装完需 `sudo dms-greeter sync`；静态二进制不耦合 glibc，仅上游发版时手动升级 |
 
 ## 使用方法
 
