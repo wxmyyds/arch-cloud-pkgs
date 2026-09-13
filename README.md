@@ -14,6 +14,7 @@
 | [dank-greeter](https://github.com/AvengeMedia/dank-greeter) | v1.6.2 | DMS Greeter 登录界面，重打包上游官方预编译 Go 单二进制（UI 内嵌，无 QML 树）。替代旧包名 `greetd-dms-greeter-bin`，装完需 `sudo dms-greeter sync`；静态二进制不耦合 glibc，仅上游发版时手动升级 |
 | [mark-shot](https://github.com/jswysnemc/mark-shot) | v0.1.52 | Qt6 Wayland 截图标注工具，重打包上游官方预编译 Arch 包（依赖、layer-shell 库与翻译插件齐全，二进制字节保真）。conflicts AUR `mark-shot-bin`；对本机已装 AUR `mark-shot` 为同名升级 |
 | [google-chrome](https://www.google.com/chrome) | 官方 stable（构建时解析） | Google 官方 Chrome .deb 重打包；版本与 SHA256 从官方 apt 索引动态解析并由 makepkg 落地校验，打包逻辑对齐 AUR 同名包。`paru -Syu` 提示同版本"升级"时跳过 |
+| [rtk](https://github.com/rtk-ai/rtk) | 官方 stable（构建时解析） | LLM token 节省代理，Rust musl 静态单文件零依赖。行为仿照官方 install.sh（302 解析 tag + checksums.txt 动态校验 + CWE-22 防御），装到 `/usr/bin/rtk`；装完删除手动装的 `~/.local/bin/rtk` |
 
 ## 使用方法
 

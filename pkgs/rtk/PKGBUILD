@@ -1,0 +1,99 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# 云端构建版 rtk：rtk-ai/rtk 官方 musl 静态二进制重打包，行为仿照官方 install.sh
+#   （curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh）
+#   - 同款 target：x86_64-unknown-linux-musl（全静态，无任何运行时依赖）
+#   - 同款版本解析：跟随 releases/latest 的 302 取 tag，GitHub API 兜底
+#   - 同款校验：从该 tag 的 checksums.txt 取 SHA256，makepkg 落地即校验
+#   - 同款安全检查：prepare() 复刻 install.sh 的路径穿越（CWE-22）防御
+# 安装位置差异：install.sh 默认装 ~/.local/bin，pacman 包规范装到 /usr/bin/rtk；
+#   装完请删除手动安装的 ~/.local/bin/rtk，避免 PATH 中旧版本遮蔽新版本。
+# 升级方法：无需修改 pkgver；每月定时重建或手动 workflow_dispatch 指定 rtk
+#          即取当时最新 stable。
+# 注意：AUR 有 rtk（cargo 源码版）/rtk-bin（同思路预编译版）/rtk-git——本包
+#      conflicts rtk-bin 与 rtk-git；paru -Syu 提示同名"升级"时跳过。
+
+pkgname=rtk
+pkgrel=1
+
+_rtk_latest_tag() {
+    local tag
+    tag="$(curl -fsSLI -o /dev/null -w '%{redirect_url}' \
+        'https://github.com/rtk-ai/rtk/releases/latest' \
+        | sed -E 's|.*/tag/([^[:space:]]+).*|\1|' | tr -d '\r')"
+    if [[ -z "$tag" ]]; then
+        # install.sh 同款兜底：redirect 解析失败回退 GitHub API
+        tag="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+            'https://api.github.com/repos/rtk-ai/rtk/releases/latest' \
+            | awk '/"tag_name":/{print $2}' | tr -d ',"')"
+    fi
+    [[ -n "$tag" ]] || return 1
+    printf '%s\n' "$tag"
+}
+
+_tag="$(_rtk_latest_tag)" || {
+    echo >&2 "!! 无法解析 rtk 最新 release tag，网络或仓库结构可能已变化"
+    exit 1
+}
+pkgver="${_tag#v}"
+[[ "$pkgver" =~ ^[0-9]+(\.[0-9]+)+$ ]] || {
+    echo >&2 "!! 解析出版本号异常：${pkgver:-（空）}"
+    exit 1
+}
+
+_target="x86_64-unknown-linux-musl"
+_asset="rtk-${_target}.tar.gz"
+
+# checksums.txt 取二进制 SHA256（install.sh 同款校验源）；LICENSE 流式计算 SHA256。
+# 两项均为同 tag 内容，随版本自动更新，无需人工维护。
+_expected_sha="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+    "https://github.com/rtk-ai/rtk/releases/download/${_tag}/checksums.txt" \
+    | grep " ${_asset}\$" | awk '{print $1}')"
+[[ "$_expected_sha" =~ ^[0-9a-f]{64}$ ]] || {
+    echo >&2 "!! checksums.txt 中未找到 ${_asset} 的 SHA256"
+    exit 1
+}
+_license_sha="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+    "https://raw.githubusercontent.com/rtk-ai/rtk/${_tag}/LICENSE" | sha256sum | cut -d' ' -f1)"
+[[ "$_license_sha" =~ ^[0-9a-f]{64}$ ]] || {
+    echo >&2 "!! LICENSE 获取失败"
+    exit 1
+}
+
+pkgdesc="CLI proxy that reduces LLM token consumption by 60-90% on common dev commands"
+arch=('x86_64')
+url="https://github.com/rtk-ai/rtk"
+license=('Apache-2.0')
+# musl 全静态单文件，无运行时依赖
+options=('!strip' '!debug')
+
+source=(
+    "rtk-${_tag}-${_target}.tar.gz::https://github.com/rtk-ai/rtk/releases/download/${_tag}/${_asset}"
+    "LICENSE::https://raw.githubusercontent.com/rtk-ai/rtk/${_tag}/LICENSE"
+)
+sha256sums=(
+    "$_expected_sha"
+    "$_license_sha"
+)
+
+prepare() {
+    cd "$srcdir"
+    local tarball="rtk-${_tag}-${_target}.tar.gz"
+
+    [[ -f rtk ]] || { echo >&2 "!! 压缩包内未找到 rtk 二进制，上游打包结构可能已变化"; return 1; }
+    local size
+    size="$(stat -L -c%s "$tarball")"
+    if (( size < 1048576 )); then
+        echo >&2 "!! 压缩包体积异常（${size} 字节），疑似错误响应"
+        return 1
+    fi
+    # 复刻 install.sh 的 CWE-22 防御：拒绝绝对路径与目录穿越成员
+    if tar -tzf "$tarball" | grep -qE '^/|(^|/)\.\.(/|$)'; then
+        echo >&2 "!! 压缩包含不安全路径，拒绝解包"
+        return 1
+    fi
+}
+
+package() {
+    install -Dm755 rtk "$pkgdir/usr/bin/rtk"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/rtk/LICENSE"
+}
