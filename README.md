@@ -80,6 +80,8 @@ mkdir pkgs/<新包名>
 git add && git commit && git push   # 自动触发构建
 ```
 
+验证一律以 CI 为准（构建 + `pacman -Qip` 元数据核验 + namcap），不在本地跑 makepkg——本仓库的意义就是本机零编译零依赖污染。
+
 `build.conf` 是可选的声明式配置（shell 语法 `key=value`），字段说明见
 [`prepare-toolchain.sh`](.github/scripts/prepare-toolchain.sh) 头部注释。常用字段：
 
