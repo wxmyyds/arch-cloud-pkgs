@@ -1,0 +1,41 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# 云端构建版 mark-shot：Qt6 Wayland 截图标注工具，重打包上游官方预编译 Arch 包
+# （上游 release 直接提供 mark-shot-bin-*.pkg.tar.zst，布局/依赖齐全，无需编译；
+#   上游 .PKGINFO 的 provides/conflicts 误用了复数键名（合法为单数 provide/conflict），
+#   导致 pacman 不认其冲突声明——本包以自己的规范声明绕开该 bug）
+# 升级方法：改 pkgver，并用 release 附带的 *.sha256 文件更新 sha256sums
+# 注意：AUR 已有 mark-shot（源码版）与 mark-shot-bin（预编译版）：
+#      - 对本机已装的 AUR mark-shot 而言，本包是同名升级，pacman -U 直接替换
+#      - conflicts 声明了 AUR 的 mark-shot-bin 防混装
+#      - paru -Syu 时若 AUR 版本号先于本仓库 bump，会提示用 AUR 源码版"升级"，
+#        应跳过并尽快 bump 本仓库 pkgver（或临时 IgnorePkg）
+# 插件：上游 Arch 包内已带 layer-shell 库与全部 4 个翻译插件，无需另行下载
+
+pkgname=mark-shot
+pkgver=0.1.52
+pkgrel=1
+pkgdesc='Qt 6 Wayland screenshot selection and annotation tool (upstream prebuilt Arch package repack)'
+arch=('x86_64')
+url='https://github.com/jswysnemc/mark-shot'
+license=('MIT')
+# 与上游 mark-shot-bin 包的 .PKGINFO 逐项一致（含 ffmpeg soname 版本约束）
+depends=('qt6-base' 'qt6-svg' 'qt6-wayland' 'layer-shell-qt'
+         'libavcodec.so=63-64' 'libavfilter.so=12-64' 'libavformat.so=63-64'
+         'libavutil.so=61-64' 'libswresample.so=7-64' 'libswscale.so=10-64'
+         'pipewire' 'grim' 'wl-clipboard' 'hicolor-icon-theme' 'python')
+optdepends=('xdg-desktop-portal: portal-based screenshot and screencast backend'
+            'xclip: X11 clipboard backend'
+            'tesseract: fallback OCR backend'
+            'tesseract-data-chi_sim: simplified Chinese OCR data for tesseract')
+conflicts=('mark-shot-bin')
+
+# 重打包保真：不剥离不拆分上游二进制
+options=('!strip' '!debug')
+
+source=("https://github.com/jswysnemc/mark-shot/releases/download/v$pkgver/mark-shot-bin-$pkgver-1-x86_64.pkg.tar.zst")
+sha256sums=('d1a3cfe06838d0ea187ab7c682f624869997eed6e56ea79afaddb08a1d3a8291')
+
+# makepkg 自动解包 .pkg.tar.zst 到 srcdir，其中 usr/ 即上游包的完整文件树
+package() {
+  cp -a "$srcdir/usr" "$pkgdir/usr"
+}

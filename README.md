@@ -12,6 +12,7 @@
 | [zcode](https://zcode.z.ai) | 官网 latest（构建时解析） | Z.ai 官方 Electron 桌面应用重打包（AppImage → 原生包）。版本自动跟最新：上游发版**无需改文件**，定时重建或手动触发即取当时最新。与 AUR `z-code-bin` 互为冲突，安装时 pacman 会提示替换 |
 | [wechat](https://linux.weixin.qq.com/) | 官网 latest（构建时解析） | 腾讯官方微信 Linux x86_64 AppImage 重打包为原生包；仅支持 x86_64，版本自动跟随官网，ARM 版暂未接入 |
 | [dank-greeter](https://github.com/AvengeMedia/dank-greeter) | v1.6.2 | DMS Greeter 登录界面，重打包上游官方预编译 Go 单二进制（UI 内嵌，无 QML 树）。替代旧包名 `greetd-dms-greeter-bin`，装完需 `sudo dms-greeter sync`；静态二进制不耦合 glibc，仅上游发版时手动升级 |
+| [mark-shot](https://github.com/jswysnemc/mark-shot) | v0.1.52 | Qt6 Wayland 截图标注工具，重打包上游官方预编译 Arch 包（依赖、layer-shell 库与翻译插件齐全，二进制字节保真）。conflicts AUR `mark-shot-bin`；对本机已装 AUR `mark-shot` 为同名升级 |
 
 ## 使用方法
 
@@ -103,6 +104,7 @@ git add && git commit && git push   # 自动触发构建
   Arch 的 rustup 包 `conflicts=('cargo' 'rust' 'rustfmt')`，两者互斥
 - 工作流里所有 GitHub 上下文都经 `env:` 传入，不在 `run:` 里直接写 `${{ }}`——
   后者是 shell 解析前的纯文本替换，`workflow_dispatch` 输入里带个分号就能执行任意命令
+- 重打包预编译产物的包一律声明 `options=('!strip' '!debug')`：makepkg 默认 strip 会改动上游二进制，保真才能让产物与上游逐字节一致
 - `build.conf` 只允许受控的变量赋值，工作流会校验包名、缓存路径、额外产物路径和 NDK 校验值；不要在配置中写 shell 表达式
 - 构建完成后会强制检查至少生成一个包，并执行 `pacman -Qip`；默认执行 `namcap`。若某个大型预编译包不适合扫描，可在其 `PKGBUILD` 顶层声明 `namcap_check=false`，工作流会跳过该包的 namcap。检查失败会阻止上传产物
 

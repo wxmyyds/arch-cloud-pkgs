@@ -27,6 +27,10 @@ optdepends=(
 provides=("$_binname=$pkgver")
 # 覆盖全部家族变体：本机旧 -bin、AUR -bin/-git、跨发行版名 dms-greeter
 conflicts=("$_binname" 'greetd-dms-greeter' 'greetd-dms-greeter-bin' 'greetd-dms-greeter-git')
+
+# 重打包保真：不剥离不拆分上游二进制（本机 makepkg.conf 若开 strip 会改动上游 Go 二进制）
+options=('!strip' '!debug')
+
 install=dank-greeter.install
 
 source=(
