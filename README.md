@@ -6,7 +6,7 @@
 
 | 包名 | 上游 | 说明 |
 |------|------|------|
-| [we-layerd](https://github.com/Aromatic05/we-layerd) | v0.2.8 | 原生 Wallpaper Engine 运行时（scene/video/web，支持 niri）|
+| [we-layerd](https://github.com/Aromatic05/we-layerd) | v0.2.8 | 原生 Wallpaper Engine 运行时（scene/video/web，支持 niri）。重打包上游官方预编译 deb，内置私有 CEF/DXC 运行时，**不再需要 AUR 依赖** |
 | [wayland-pipewire-idle-inhibit-aur](https://github.com/rafaelrc7/wayland-pipewire-idle-inhibit) | v0.7.1 | 播放声音时抑制 Wayland idle（包名带 `-aur` 后缀以避免产物匹配问题，`provides` 原包名）|
 | [rtk-termux](https://github.com/rtk-ai/rtk) | v0.47.0 | 交叉编译的 Termux aarch64 版（上游只发 gnu/musl 预编译，没有 Bionic）。**不要在本机 Arch 上安装**，见下 |
 | [zcode](https://zcode.z.ai) | 官网 latest（构建时解析） | Z.ai 官方 Electron 桌面应用重打包（AppImage → 原生包）。版本自动跟最新：上游发版**无需改文件**，定时重建或手动触发即取当时最新。与 AUR `z-code-bin` 互为冲突，安装时 pacman 会提示替换 |
@@ -34,14 +34,12 @@ sudo pacman -U *.pacman
 微信包仅构建 x86_64 版本，安装产物为官方 AppImage 解包后的原生 pacman 包，
 不需要 FUSE。若已安装其他会占用同名微信文件的原生 Linux 包，请按 pacman 提示先处理冲突。
 
-**两个前置坑：**
+**前置坑：**
 
-- `we-layerd` 依赖 `cef` 和 `directx-shader-compiler`，这两个都在 AUR、不在官方仓库里。
-  直接用 `pacman -U` 会因缺依赖报错，需先用 AUR helper 装好：
-  ```bash
-  paru -S cef directx-shader-compiler
-  sudo pacman -U we-layerd-*.pacman
-  ```
+- `we-layerd` 改用上游官方预编译 deb 重打包后，CEF 与 DXC 运行时已内置
+  （`/usr/lib/cef/`、`/usr/lib/we-layerd/dxc/`，经 `$ORIGIN` RUNPATH 加载），
+  全部依赖都在官方仓库，`pacman -U` 直接装。若之前为旧源码构建版装过 AUR 的
+  `cef` / `directx-shader-compiler` 且无其他包依赖它们，可顺手移除。
 - `rtk-termux` 的 `arch=('aarch64')`，产物是 Android Bionic 二进制，**在 x86_64 主机上会被 pacman 的架构检查拦下**——这是刻意的保护，装进去会顶掉正常的 `/usr/bin/rtk`。
   给 Termux 用的话取 artifact 里的裸二进制 `rtk-aarch64-android` 即可，不需要走 pacman。
 ### 升级某个包
@@ -52,7 +50,9 @@ sudo pacman -U *.pacman
   ```bash
   curl -sL <tarball url> | sha256sum
   ```
-- 源是 git tag 的包（`we-layerd`）保持 `SKIP`。
+- 源是 GitHub release 附件的包（`we-layerd`、`mark-shot`、`dank-greeter`）：
+  改 `pkgver` 后用 release 页附带的 SHA256SUMS / *.sha256 更新 `sha256sums`
+  （`we-layerd` 取其中 deb 那一行）。
 - `zcode` 和 `wechat` 不需要"升级"：`pkgver` 在构建时从官网页面解析最新版（解析失败会
   直接报错终止，不会打出错误版本）。它们使用浮动官方下载源，当前官网未提供可用于
   PKGBUILD 的固定 SHA-256，因此 `sha256sums` 为 `SKIP`；完整性由 `prepare()` 的体积下限、
@@ -77,7 +77,8 @@ sudo pacman -U *.pacman
 
 ```bash
 mkdir pkgs/<新包名>
-# 参照 pkgs/we-layerd/PKGBUILD 编写
+# 参照已有包的 PKGBUILD 编写：源码构建参照 wayland-pipewire-idle-inhibit-aur，
+# 预编译重打包参照 we-layerd（deb）/ mark-shot（现成 pacman 包）/ dank-greeter（裸二进制）
 git add && git commit && git push   # 自动触发构建
 ```
 

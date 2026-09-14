@@ -1,94 +1,126 @@
 # Maintainer: wxmyyds <wxmyyds0601@163.com>
-# 云端构建版 we-layerd：锁定上游 tag，完整功能（scene/video/web）
-# 升级方法：改 pkgver 为上游新版本号，然后 sha256sums 保持 SKIP（git tag 源）
+# 云端构建版 we-layerd：重打包上游官方预编译 Ubuntu amd64 deb（v0.2.8 起上游
+# release 附带完整产物）。deb 内私有捆绑了 CEF（usr/lib/cef/）与 DXC
+# （usr/lib/we-layerd/dxc/）运行时，二进制经 $ORIGIN 相对 RUNPATH 加载——
+# 相比旧源码构建版彻底去掉 AUR 的 cef / directx-shader-compiler 两个前置依赖，
+# 本机零编译、pacman 官方源即可满足全部依赖。
+# 升级方法：改 pkgver 为上游新 tag（去掉 v 前缀），并按 release 附件 SHA256SUMS
+#          中 deb 那一行的值更新 sha256sums
+#
+# 注意：
+# - deb 二进制为 Ubuntu 构建版，we-gui 要求 GLIBC_2.43+，Arch 滚动 glibc 始终
+#   满足；gstreamer/gtk 等 soname bump 由每月 1 号的定时全量重建兜底
+# - deb 的 postinst/postrm 仅做 deb-systemd-user-helper 处理，Arch 无对应需求，
+#   用户服务（/usr/lib/systemd/user/we-layerd.service）按需 systemctl --user enable
+# - 上游仓库至今不含 LICENSE（deb copyright 声明 all-rights-reserved 且注明
+#   "intended for local testing"），本仓库为个人云端构建，仅自用不分发
 
-_pkgname=we-layerd
-pkgname=$_pkgname
-pkgver=0.2.7
-# 3: 补 we-gui.desktop、修正运行时依赖（libdrm/libva/gst-plugins-bad-libs）、
-#    许可证改为 custom:unlicensed
-pkgrel=3
-pkgdesc="A native Wallpaper Engine runtime for Linux Wayland (niri/Hyprland/KDE/GNOME)"
+pkgname=we-layerd
+pkgver=0.2.8
+pkgrel=1
+pkgdesc="A native Wallpaper Engine runtime for Linux Wayland (niri/Hyprland/KDE/GNOME) (upstream prebuilt deb repack)"
 arch=('x86_64')
 url="https://github.com/Aromatic05/we-layerd"
-# 上游 v0.2.7 仓库内不含任何 LICENSE/COPYING 文件，官方 PKGBUILD 亦声明为
+# 上游 v0.2.8 仓库内不含任何 LICENSE/COPYING 文件，官方 Arch PKGBUILD 亦声明为
 # custom:unlicensed——此处不得写成 MIT
 license=('custom:unlicensed')
-# 依赖清单对齐上游 package/archlinux/PKGBUILD
 depends=(
-    'cef'
-    'directx-shader-compiler'
+    # we-layerd 守护进程本体（glibc/gcc-libs 由 base 隐式提供）
+    'libpulse'
+    'wayland'
+    # renderer.so 是 dlopen 加载的，链接以下库：符号到运行时才解析，
+    # 缺一个就装完启动即失败
+    'gstreamer'
+    'gst-plugins-base-libs'   # libgstapp/libgstvideo/libgstallocators
+    'gst-plugins-bad-libs'    # libgstva（GStreamer VA-API 桥）
+    'libva'
+    'vulkan-icd-loader'
+    'lz4'
     'fontconfig'
     'freetype2'
-    'gstreamer'
-    'gst-libav'
-    # renderer .so 是 dlopen 加载的，符号到运行时才解析。放进 makedepends 会导致
-    # 构建全绿但装完启动即失败——必须留在运行时依赖
-    'gst-plugins-bad-libs'
-    'gst-plugins-base-libs'
-    # 视频壁纸需要完整插件集（qtdemux 等解封装器）
+    'pango'
+    'cairo'
+    'glib2'
+    # 视频壁纸：解封装器/解码器插件由 GStreamer 运行时 dlopen，必须实装
+    # （对齐 deb Depends 的 plugins-base/good/bad/libav）
     'gst-plugins-base'
     'gst-plugins-good'
+    'gst-plugins-bad'
+    'gst-libav'
+    # we-gui：GTK3 界面 + 系统托盘（dlopen libayatana-appindicator3）+ libxdo
     'gtk3'
-    # DMA-BUF 零拷贝路径 + VA-API 硬件解码，两者官方均列为 depends
-    'libdrm'
-    'libglvnd'
-    'libva'
-    'libxkbcommon'
-    'lz4'
-    'mesa'
-    'pango'
-    'vulkan-icd-loader'
-    'wayland'
-    'xdotool'
-    # we-gui 系统托盘图标
+    'gdk-pixbuf2'
     'libayatana-appindicator'
+    'xdotool'
+    # 内置私有 CEF 的宿主库（旧源码构建版来自 AUR cef 包的依赖链）
+    'nss'
+    'nspr'
+    'alsa-lib'
+    'libcups'
+    'at-spi2-core'
+    'dbus'
+    'expat'
+    'zlib'
+    'mesa'          # libgbm
+    'libdrm'        # DMA-BUF 零拷贝路径
+    'libx11'
+    'libxcb'
+    'libxcomposite'
+    'libxdamage'
+    'libxext'
+    'libxfixes'
+    'libxrandr'
+    'libxkbcommon'
+    'systemd-libs'  # libudev
+    'hicolor-icon-theme'
 )
-makedepends=(
-    'git'
-    'rust'
-    'cmake'
-    'pkgconf'
-    'wayland-protocols'
-    'vulkan-headers'
-)
-source=("$_pkgname::git+https://github.com/Aromatic05/we-layerd.git#tag=v$pkgver")
-sha256sums=('SKIP')
+# deb 的 Suggests: gnome-shell——GNOME 扩展随包安装，仅 GNOME 会话用到
+optdepends=('gnome-shell: GNOME 桌面壁纸集成（bundled 扩展 we-layerd@aromatic）')
 
-# 关闭 debug 包 + 显式 strip：Rust release 二进制自带完整 debug 符号，
-# 不处理的话 makepkg 会额外产出几十 MB 的 -debug 包，主包也偏大
-options=('!debug' '!emptydirs')
+# 重打包保真：不剥离不拆分上游二进制（上游已 strip，二进制自带 RUNPATH 指向
+# 私有 CEF/DXC，strip 不影响加载，但按仓库约定保持逐字节一致）
+# deb 树内无空目录，留 !emptydirs 仅为布局保真
+options=('!strip' '!debug' '!emptydirs')
+
+# 产物安装后约 390MB（整套私有 CEF），namcap 扫描该体积会严重拖慢 CI，
+# 同 google-chrome/wechat 显式关闭；依赖已按 deb Depends + 实测 NEEDED 逐项核对
+namcap_check=false
+
+source=("we-layerd_${pkgver}-1_amd64.deb::https://github.com/Aromatic05/we-layerd/releases/download/v${pkgver}/we-layerd_${pkgver}-1_amd64.deb")
+# 值取自上游 release 附件 SHA256SUMS 中 we-layerd_${pkgver}-1_amd64.deb 那一行
+sha256sums=('f21d45334b07ef0e9bf554225f86af9a022a50680b69fada8c0c4ce0432a2a22')
 
 prepare() {
-    cd "$_pkgname"
-    # 上游要求初始化 renderer 子模块（AUR 坑包就是漏了这步）
-    git submodule update --init --recursive
-}
+    cd "$srcdir"
+    local deb="we-layerd_${pkgver}-1_amd64.deb"
 
-build() {
-    cd "$_pkgname"
-    # 编译缓存与源码分离：统一放 $startdir/target（包目录），由工作流按包缓存；
-    # 但上游 xtask install 硬编码读源码目录下 target/...，用符号链接桥接。
-    # 注意：package() 里 xtask 会再跑一次 cargo build，靠这个链接 + 上面导出的
-    # CARGO_TARGET_DIR 落到同一目录才能命中缓存，改动此处会导致二次全量编译。
-    rm -rf target
-    ln -sfn "$startdir/target" target
-    export CARGO_TARGET_DIR="$startdir/target"
-    cargo build --locked --release --workspace
+    [[ -f "$deb" ]] || { echo >&2 "!! 源 deb 缺失，下载未落盘"; return 1; }
+    local size
+    size="$(stat -L -c%s "$deb")"
+    if (( size < 104857600 )); then
+        echo >&2 "!! deb 体积异常（${size} 字节），疑似错误响应页"
+        return 1
+    fi
+    # deb 是 ar 归档：魔数 '!<arch>'（第 8 字节为换行，命令替换会去尾，故取 7 字节）
+    if [[ "$(dd if="$deb" bs=1 count=7 2>/dev/null)" != '!<arch>' ]]; then
+        echo >&2 "!! ar 魔数校验失败，疑似非官方 deb"
+        return 1
+    fi
+    # makepkg 对 ar 归档按内容探测用 bsdtar 解出三个成员，断言关键成员在位
+    [[ -f data.tar.zst ]] || { echo >&2 "!! data.tar.zst 未被解出"; return 1; }
 }
 
 package() {
-    cd "$_pkgname"
-    DESTDIR="$pkgdir" cargo xtask install --prefix /usr
-    # xtask install 的产物只有 we-layerd / we-gui / renderer.so / we-cef-helper /
-    # GNOME 扩展，不含 .desktop。不补这一步 we-gui 不会出现在任何应用启动器里
-    # （上游官方 PKGBUILD 是手工 install 的这一项）
-    install -Dm644 apps/we-gui/assets/we-gui.desktop \
-        "$pkgdir/usr/share/applications/we-gui.desktop"
-    # 显式 strip 所有可执行文件/共享库（renderer 是 dlopen 的 .so，strip 不影响加载）
-    find "$pkgdir" -type f \( -perm -111 -o -name '*.so*' \) -print0 | while IFS= read -r -d '' f; do
-        strip --strip-unneeded "$f" 2>/dev/null || true
-    done
-    # 打印 strip 后体积便于日志确认
-    ls -lh "$pkgdir/usr/bin/" "$pkgdir/usr/lib/" 2>/dev/null || true
+    cd "$srcdir"
+    # 第二层解包：data.tar.zst（libarchive bsdtar 原生支持 zstd），整树落位
+    bsdtar -xf data.tar.zst -C "$pkgdir/"
+
+    # 按 pacman 约定把主许可证落位到 /usr/share/licenses；
+    # share/doc 下的 third-party/（CEF/DXC 许可全文）原样保留，copyright 内有引用
+    install -Dm644 "$pkgdir/usr/share/doc/we-layerd/copyright" \
+        "$pkgdir/usr/share/licenses/$pkgname/copyright"
+
+    # 打印体积便于日志确认（内置 CEF 约占八成）
+    du -sh "$pkgdir/usr/lib/cef" "$pkgdir/usr/lib/we-layerd" 2>/dev/null || true
+    ls -lh "$pkgdir/usr/bin/" 2>/dev/null || true
 }
