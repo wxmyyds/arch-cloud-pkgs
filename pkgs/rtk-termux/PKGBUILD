@@ -1,15 +1,40 @@
 # Maintainer: wxmyyds <wxmyyds0601@163.com>
 # rtk Termux Bionic 版：给 Termux aarch64 用，解决官方只有 gnu 预编译的问题
-# 升级方法：改 pkgver 为 https://github.com/rtk-ai/rtk/releases 最新 tag，
-#           并把 sha256sums 换成新 tarball 的实际值（见下）
+# 升级方法：无需修改 pkgver；每月定时重建或手动 workflow_dispatch 指定 rtk-termux
+#          即取当时最新 stable（同 rtk 包：releases/latest 302 解析 + GitHub API 兜底）。
 #
 # 注意：本包是交叉编译产物，内含 aarch64-linux-android（Bionic）二进制，
 #       不是给本机 Arch 用的。真正要分发的是 extra_artifacts 里的裸二进制
 #       rtk-aarch64-android（供 Termux 直接取用），pacman 包只是顺带产物。
 
 pkgname=rtk-termux
-pkgver=0.47.0
 pkgrel=1
+
+_rtk_latest_tag() {
+    local tag
+    tag="$(curl -fsSLI -o /dev/null -w '%{redirect_url}' \
+        'https://github.com/rtk-ai/rtk/releases/latest' \
+        | sed -E 's|.*/tag/([^[:space:]]+).*|\1|' | tr -d '\r')"
+    if [[ -z "$tag" ]]; then
+        # 302 解析失败回退 GitHub API（releases/latest 只指向非 prerelease 稳定版）
+        tag="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+            'https://api.github.com/repos/rtk-ai/rtk/releases/latest' \
+            | awk '/"tag_name":/{print $2}' | tr -d ',"')"
+    fi
+    [[ -n "$tag" ]] || return 1
+    printf '%s\n' "$tag"
+}
+
+_tag="$(_rtk_latest_tag)" || {
+    echo >&2 "!! 无法解析 rtk 最新 release tag，网络或仓库结构可能已变化"
+    exit 1
+}
+pkgver="${_tag#v}"
+[[ "$pkgver" =~ ^[0-9]+(\.[0-9]+)+$ ]] || {
+    echo >&2 "!! 解析出版本号异常：${pkgver:-（空）}"
+    exit 1
+}
+
 pkgdesc="RTK Bionic build for Termux aarch64 (token optimizer for pi/claude/codex)"
 # 产物固定是 aarch64-linux-android（Bionic），与构建机架构无关，因此按目标架构声明。
 # 这样在 x86_64 主机上 pacman -U 会被架构检查直接拦下，避免把 Android 二进制
@@ -26,9 +51,29 @@ depends=()
 makedepends=('git' 'rustup')
 provides=('rtk')
 conflicts=('rtk')
-source=("rtk-$pkgver.tar.gz::https://github.com/rtk-ai/rtk/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('b9e74c7da9fc0f6ee63a993d590cc518973cae912f4fb6e2f2c44c9072b03ac6')
+source=("rtk-$pkgver.tar.gz::https://github.com/rtk-ai/rtk/archive/refs/tags/${_tag}.tar.gz")
+# GitHub archive 源码 tarball 是动态生成的，SHA 不保证稳定（官方明确不承诺），
+# 且 tag 每次构建都可能变化，无法预填。完整性由 prepare() 的体积下限 + 关键文件
+# 结构检查兜底（同 rtk 包对预编译产物的兜底思路）。
+sha256sums=('SKIP')
 options=('!debug' '!strip' '!emptydirs')
+
+prepare() {
+    cd "$srcdir"
+    local tarball="rtk-$pkgver.tar.gz"
+
+    # 体积下限：源码树通常 >1MB，防止解析/下载到错误响应
+    local size
+    size="$(stat -L -c%s "$tarball")"
+    if (( size < 512000 )); then
+        echo >&2 "!! 源码 tarball 体积异常（${size} 字节），疑似错误响应"
+        return 1
+    fi
+    # 关键结构校验：目录名、Cargo.toml、src/ 均存在
+    [[ -d "rtk-$pkgver" ]] || { echo >&2 "!! 未找到源码目录 rtk-$pkgver，上游打包结构可能已变化"; return 1; }
+    [[ -f "rtk-$pkgver/Cargo.toml" ]] || { echo >&2 "!! 未找到 Cargo.toml"; return 1; }
+    [[ -d "rtk-$pkgver/src" ]] || { echo >&2 "!! 未找到 src/ 目录"; return 1; }
+}
 
 build() {
   cd "rtk-$pkgver"

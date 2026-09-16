@@ -8,7 +8,7 @@
 |------|------|------|
 | we-layerd | [Aromatic05/we-layerd](https://github.com/Aromatic05/we-layerd) | 原生 Wallpaper Engine 运行时（scene/video/web，支持 niri）。重打包上游官方预编译 deb，内置私有 CEF/DXC 运行时，**不再需要 AUR 依赖** |
 | wayland-pipewire-idle-inhibit-aur | [rafaelrc7/wayland-pipewire-idle-inhibit](https://github.com/rafaelrc7/wayland-pipewire-idle-inhibit) | 播放声音时抑制 Wayland idle（包名带 `-aur` 后缀以避免产物匹配问题，`provides` 原包名）|
-| rtk-termux | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | 交叉编译的 Termux aarch64 版（上游只发 gnu/musl 预编译，没有 Bionic）。**不要在本机 Arch 上安装**，见下 |
+| rtk-termux | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | 交叉编译的 Termux aarch64 版（上游只发 gnu/musl 预编译，没有 Bionic），版本构建时跟随最新 release。**不要在本机 Arch 上安装**，见下 |
 | zcode | [Z.ai](https://zcode.z.ai) | Z.ai 官方 Electron 桌面应用重打包（AppImage → 原生包）。版本自动跟最新：上游发版**无需改文件**，定时重建或手动触发即取当时最新。与 AUR `z-code-bin` 互为冲突，安装时 pacman 会提示替换 |
 | wechat | [腾讯微信](https://linux.weixin.qq.com/) | 腾讯官方微信 Linux x86_64 AppImage 重打包为原生包；仅支持 x86_64，版本自动跟随官网，ARM 版暂未接入 |
 | dank-greeter | [AvengeMedia/dank-greeter](https://github.com/AvengeMedia/dank-greeter) | DMS Greeter 登录界面，重打包上游官方预编译 Go 单二进制（UI 内嵌，无 QML 树）。替代旧包名 `greetd-dms-greeter-bin`，装完需 `sudo dms-greeter sync`；静态二进制不耦合 glibc，仅上游发版时手动升级 |
@@ -45,7 +45,7 @@ sudo pacman -U *.pacman
 ### 升级某个包
 编辑对应 `pkgs/<包名>/PKGBUILD` 的 `pkgver`，commit & push 即可自动重新构建。
 
-- 源是 GitHub tarball 的包（`rtk-termux`、`wayland-pipewire-idle-inhibit-aur`）
+- 源是 GitHub tarball 的包（`wayland-pipewire-idle-inhibit-aur`）
   必须同时更新 `sha256sums`：
   ```bash
   curl -sL <tarball url> | sha256sum
@@ -53,10 +53,13 @@ sudo pacman -U *.pacman
 - 源是 GitHub release 附件的包（`we-layerd`、`mark-shot`、`dank-greeter`）：
   改 `pkgver` 后用 release 页附带的 SHA256SUMS / *.sha256 更新 `sha256sums`
   （`we-layerd` 取其中 deb 那一行）。
-- `zcode` 和 `wechat` 不需要"升级"：`pkgver` 在构建时从官网页面解析最新版（解析失败会
-  直接报错终止，不会打出错误版本）。它们使用浮动官方下载源，当前官网未提供可用于
-  PKGBUILD 的固定 SHA-256，因此 `sha256sums` 为 `SKIP`；完整性由 `prepare()` 的体积下限、
-  AppImage type-2 魔数和解包后的关键文件检查兜底。微信源文件名包含版本号，避免固定
+- `zcode`、`wechat` 和 `rtk-termux` 不需要"升级"：`pkgver` 在构建时从官网页面或
+  `releases/latest` 解析最新版（解析失败会
+  直接报错终止，不会打出错误版本）。它们使用浮动官方下载源，当前上游未提供可用于
+  PKGBUILD 的固定 SHA-256（GitHub archive 源码 tarball 本身就是动态生成的，官方不承诺
+  内容寻址），因此 `sha256sums` 为 `SKIP`；完整性由 `prepare()` 的体积下限、
+  AppImage type-2 魔数和解包后的关键文件检查兜底（`rtk-termux` 为源码树体积下限与
+  `Cargo.toml`/`src/` 结构检查）。微信与 `rtk-termux` 的源文件名包含版本号，避免固定
   下载 URL 在 CI 的 `SRCDEST` 缓存中复用旧版本。
 
 改了 `pkgver` 就属于改了 PKGBUILD，缓存 key 随之变化；但由于配了 `restore-keys`，
