@@ -12,7 +12,7 @@
 | zcode | [Z.ai](https://zcode.z.ai) | Z.ai 官方 Electron 桌面应用重打包（AppImage → 原生包）。版本自动跟最新：上游发版**无需改文件**，定时重建或手动触发即取当时最新。与 AUR `z-code-bin` 互为冲突，安装时 pacman 会提示替换 |
 | wechat | [腾讯微信](https://linux.weixin.qq.com/) | 腾讯官方微信 Linux x86_64 AppImage 重打包为原生包；仅支持 x86_64，版本自动跟随官网，ARM 版暂未接入 |
 | dank-greeter | [AvengeMedia/dank-greeter](https://github.com/AvengeMedia/dank-greeter) | DMS Greeter 登录界面，重打包上游官方预编译 Go 单二进制（UI 内嵌，无 QML 树）。替代旧包名 `greetd-dms-greeter-bin`，装完需 `sudo dms-greeter sync`；静态二进制不耦合 glibc，仅上游发版时手动升级 |
-| mark-shot | [jswysnemc/mark-shot](https://github.com/jswysnemc/mark-shot) | Qt6 Wayland 截图标注工具，重打包上游官方预编译 Arch 包（依赖、layer-shell 库与翻译插件齐全，二进制字节保真）。conflicts AUR `mark-shot-bin`；对本机已装 AUR `mark-shot` 为同名升级 |
+| mark-shot | [jswysnemc/mark-shot](https://github.com/jswysnemc/mark-shot) | Qt6 Wayland 截图标注工具，重打包上游官方预编译 Arch 包（依赖、layer-shell 库与翻译插件齐全，二进制字节保真），版本构建时跟随最新 release。conflicts AUR `mark-shot-bin`；对本机已装 AUR `mark-shot` 为同名升级 |
 | google-chrome | [Google](https://www.google.com/chrome) | Google 官方 Chrome .deb 重打包；版本与 SHA256 从官方 apt 索引动态解析并由 makepkg 落地校验，打包逻辑对齐 AUR 同名包。`paru -Syu` 提示同版本"升级"时跳过 |
 | rtk | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | LLM token 节省代理，Rust musl 静态单文件零依赖。行为仿照官方 install.sh（302 解析 tag + checksums.txt 动态校验 + CWE-22 防御），装到 `/usr/bin/rtk`；装完删除手动装的 `~/.local/bin/rtk` |
 
@@ -51,16 +51,17 @@ sudo pacman -U *.pacman
   ```bash
   curl -sL <tarball url> | sha256sum
   ```
-- 源是 GitHub release 附件的包（`mark-shot`、`dank-greeter`）：
-  改 `pkgver` 后用 release 页附带的 SHA256SUMS / *.sha256 更新 `sha256sums`
-  （`mark-shot` 取其中对应那一行）。
+- 源是 GitHub release 附件的包（`dank-greeter`）：
+  改 `pkgver` 后用 release 页附带的 SHA256SUMS / *.sha256 更新 `sha256sums`。
 
-其余包（`google-chrome`、`rtk`、`rtk-termux`、`we-layerd`、`wechat`、`zcode`）不需要
+其余包（`google-chrome`、`mark-shot`、`rtk`、`rtk-termux`、`we-layerd`、`wechat`、`zcode`）不需要
 "升级"：`pkgver` 在构建时从官网页面或 `releases/latest` 解析最新版（解析失败会直接
 报错终止，不会打出错误版本）。
 
 - `we-layerd` 的 deb 文件名与 SHA256 从该 tag 的 SHA256SUMS 动态解析，makepkg 落地
   即校验（与 `rtk` 的 checksums.txt 同思路）。
+- `mark-shot` 的 x86_64 pkg.tar.zst 资产名与 SHA256 从该 tag 的 `*.pkg.tar.zst.sha256`
+  动态解析；上游若改了 pkgrel 导致常规命名探测落空，回退 release 资产页解析实际文件名。
 - `rtk-termux` 用 GitHub archive 源码 tarball（动态生成，官方不承诺内容寻址），
   `sha256sums` 为 `SKIP`；完整性由 `prepare()` 的体积下限 + `Cargo.toml`/`src/`
   结构检查兜底。

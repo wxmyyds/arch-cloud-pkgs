@@ -3,7 +3,9 @@
 # （上游 release 直接提供 mark-shot-bin-*.pkg.tar.zst，布局/依赖齐全，无需编译；
 #   上游 .PKGINFO 的 provides/conflicts 误用了复数键名（合法为单数 provide/conflict），
 #   导致 pacman 不认其冲突声明——本包以自己的规范声明绕开该 bug）
-# 升级方法：改 pkgver，并用 release 附带的 *.sha256 文件更新 sha256sums
+# 升级方法：无需修改 pkgver；构建时解析 releases/latest 取最新 tag（302 + API 兜底），
+#          资产文件名与 SHA256 从该 tag 的 *.pkg.tar.zst.sha256 动态解析，
+#          makepkg 下载后落地即校验（同 rtk/we-layerd 思路）
 # 注意：AUR 已有 mark-shot（源码版）与 mark-shot-bin（预编译版）：
 #      - 对本机已装的 AUR mark-shot 而言，本包是同名升级，pacman -U 直接替换
 #      - conflicts 声明了 AUR 的 mark-shot-bin 防混装
@@ -12,8 +14,58 @@
 # 插件：上游 Arch 包内已带 layer-shell 库与全部 4 个翻译插件，无需另行下载
 
 pkgname=mark-shot
-pkgver=0.1.52
 pkgrel=1
+
+_mark_shot_latest_tag() {
+    local tag
+    tag="$(curl -fsSLI -o /dev/null -w '%{redirect_url}' \
+        'https://github.com/jswysnemc/mark-shot/releases/latest' \
+        | sed -E 's|.*/tag/([^[:space:]]+).*|\1|' | tr -d '\r')"
+    if [[ -z "$tag" ]]; then
+        # 302 解析失败回退 GitHub API（releases/latest 只指向非 prerelease 稳定版）
+        tag="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+            'https://api.github.com/repos/jswysnemc/mark-shot/releases/latest' \
+            | awk '/"tag_name":/{print $2}' | tr -d ',"')"
+    fi
+    [[ -n "$tag" ]] || return 1
+    printf '%s\n' "$tag"
+}
+
+_tag="$(_mark_shot_latest_tag)" || {
+    echo >&2 "!! 无法解析 mark-shot 最新 release tag，网络或仓库结构可能已变化"
+    exit 1
+}
+pkgver="${_tag#v}"
+[[ "$pkgver" =~ ^[0-9]+(\.[0-9]+)+$ ]] || {
+    echo >&2 "!! 解析出版本号异常：${pkgver:-（空）}"
+    exit 1
+}
+
+# 定位 x86_64 预编译 Arch 包资产与 SHA256：
+# 1）先试常规命名 mark-shot-bin-$pkgver-1-x86_64.pkg.tar.zst，.sha256 存在即命中
+#    （GitHub release 资产 URL 不存在时返回 404，curl -f 直接失败，不跟随下载）
+# 2）未命中（如上游改了 pkgrel）则从 release 资产页 expanded_assets 解析实际文件名
+_base="https://github.com/jswysnemc/mark-shot/releases/download/${_tag}"
+_asset="mark-shot-bin-${pkgver}-1-x86_64.pkg.tar.zst"
+if ! curl -fsS --connect-timeout 15 --max-time 30 -o /dev/null "${_base}/${_asset}.sha256" 2>/dev/null; then
+    _asset="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+        "https://github.com/jswysnemc/mark-shot/releases/expanded_assets/${_tag}" \
+        | grep -oE '/jswysnemc/mark-shot/releases/download/[^"[:space:]]+x86_64\.pkg\.tar\.zst' \
+        | head -n1 | sed 's|.*/||')"
+    [[ -n "$_asset" ]] || {
+        echo >&2 "!! 未找到 x86_64 pkg.tar.zst 资产，上游 release 结构可能已变化"
+        exit 1
+    }
+fi
+_sha_line="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 "${_base}/${_asset}.sha256")" || {
+    echo >&2 "!! 获取 ${_asset}.sha256 失败"
+    exit 1
+}
+_expected_sha="$(awk '{print $1}' <<<"$_sha_line" | head -n1)"
+[[ "$_expected_sha" =~ ^[0-9a-f]{64}$ ]] || {
+    echo >&2 "!! SHA256 值异常：${_expected_sha:-（空）}"
+    exit 1
+}
 pkgdesc='Qt 6 Wayland screenshot selection and annotation tool (upstream prebuilt Arch package repack)'
 arch=('x86_64')
 url='https://github.com/jswysnemc/mark-shot'
@@ -32,8 +84,26 @@ conflicts=('mark-shot-bin')
 # 重打包保真：不剥离不拆分上游二进制
 options=('!strip' '!debug')
 
-source=("https://github.com/jswysnemc/mark-shot/releases/download/v$pkgver/mark-shot-bin-$pkgver-1-x86_64.pkg.tar.zst")
-sha256sums=('d1a3cfe06838d0ea187ab7c682f624869997eed6e56ea79afaddb08a1d3a8291')
+source=("${_base}/${_asset}")
+# 值构建时从该 tag 的 ${_asset}.sha256 解析，随版本自动更新，无需人工维护
+sha256sums=("$_expected_sha")
+
+# 上游包只含 .PKGINFO（无任何安装/升级钩子），不会解出 .INSTALL/.MTREE 等
+# 元数据成员，这里无需额外处理
+prepare() {
+    cd "$srcdir"
+
+    # 体积下限：上游包约 2.3MB，防止下载到错误响应页
+    local size
+    size="$(stat -L -c%s "$_asset")"
+    if (( size < 524288 )); then
+        echo >&2 "!! 包体积异常（${size} 字节），疑似错误响应"
+        return 1
+    fi
+    # 上游包内主程序与私有库目录必须在位（package() 整树 cp -a 的前提）
+    [[ -x usr/bin/mark-shot ]] || { echo >&2 "!! 未解出 usr/bin/mark-shot，上游包布局可能已变化"; return 1; }
+    [[ -d usr/lib/mark-shot ]] || { echo >&2 "!! 未解出 usr/lib/mark-shot（layer-shell 库/插件），上游包布局可能已变化"; return 1; }
+}
 
 # makepkg 自动解包 .pkg.tar.zst 到 srcdir，其中 usr/ 即上游包的完整文件树
 package() {
