@@ -17,7 +17,7 @@ pkgrel=1
 
 _rtk_latest_tag() {
     local tag
-    tag="$(curl -fsSLI -o /dev/null -w '%{redirect_url}' \
+    tag="$(curl -fsSI -o /dev/null -w '%{redirect_url}' \
         'https://github.com/rtk-ai/rtk/releases/latest' \
         | sed -E 's|.*/tag/([^[:space:]]+).*|\1|' | tr -d '\r')"
     if [[ -z "$tag" ]]; then
@@ -52,7 +52,7 @@ _expected_sha="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
     echo >&2 "!! checksums.txt 中未找到 ${_asset} 的 SHA256"
     exit 1
 }
-_license_sha="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+_license_sha="$(set -o pipefail; curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
     "https://raw.githubusercontent.com/rtk-ai/rtk/${_tag}/LICENSE" | sha256sum | cut -d' ' -f1)"
 [[ "$_license_sha" =~ ^[0-9a-f]{64}$ ]] || {
     echo >&2 "!! LICENSE 获取失败"

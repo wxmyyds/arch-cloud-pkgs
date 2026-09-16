@@ -7,11 +7,11 @@
 | 包名 | 上游 | 说明 |
 |------|------|------|
 | we-layerd | [Aromatic05/we-layerd](https://github.com/Aromatic05/we-layerd) | 原生 Wallpaper Engine 运行时（scene/video/web，支持 niri）。重打包上游官方预编译 deb，内置私有 CEF/DXC 运行时，版本构建时跟随最新 release。**不再需要 AUR 依赖** |
-| wayland-pipewire-idle-inhibit-aur | [rafaelrc7/wayland-pipewire-idle-inhibit](https://github.com/rafaelrc7/wayland-pipewire-idle-inhibit) | 播放声音时抑制 Wayland idle（包名带 `-aur` 后缀以避免产物匹配问题，`provides` 原包名）|
+| wayland-pipewire-idle-inhibit-aur | [rafaelrc7/wayland-pipewire-idle-inhibit](https://github.com/rafaelrc7/wayland-pipewire-idle-inhibit) | 播放声音时抑制 Wayland idle（包名带 `-aur` 后缀以避免产物匹配问题，`provides` 原包名），版本构建时跟随最新 tag，源码编译 |
 | rtk-termux | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | 交叉编译的 Termux aarch64 版（上游只发 gnu/musl 预编译，没有 Bionic），版本构建时跟随最新 release。**不要在本机 Arch 上安装**，见下 |
 | zcode | [Z.ai](https://zcode.z.ai) | Z.ai 官方 Electron 桌面应用重打包（AppImage → 原生包）。版本自动跟最新：上游发版**无需改文件**，定时重建或手动触发即取当时最新。与 AUR `z-code-bin` 互为冲突，安装时 pacman 会提示替换 |
 | wechat | [腾讯微信](https://linux.weixin.qq.com/) | 腾讯官方微信 Linux x86_64 AppImage 重打包为原生包；仅支持 x86_64，版本自动跟随官网，ARM 版暂未接入 |
-| dank-greeter | [AvengeMedia/dank-greeter](https://github.com/AvengeMedia/dank-greeter) | DMS Greeter 登录界面，重打包上游官方预编译 Go 单二进制（UI 内嵌，无 QML 树）。替代旧包名 `greetd-dms-greeter-bin`，装完需 `sudo dms-greeter sync`；静态二进制不耦合 glibc，仅上游发版时手动升级 |
+| dank-greeter | [AvengeMedia/dank-greeter](https://github.com/AvengeMedia/dank-greeter) | DMS Greeter 登录界面，重打包上游官方预编译 Go 单二进制（UI 内嵌，无 QML 树），版本构建时跟随最新 release。替代旧包名 `greetd-dms-greeter-bin`，装完需 `sudo dms-greeter sync`；静态二进制不耦合 glibc |
 | mark-shot | [jswysnemc/mark-shot](https://github.com/jswysnemc/mark-shot) | Qt6 Wayland 截图标注工具，重打包上游官方预编译 Arch 包（依赖、layer-shell 库与翻译插件齐全，二进制字节保真），版本构建时跟随最新 release。conflicts AUR `mark-shot-bin`；对本机已装 AUR `mark-shot` 为同名升级 |
 | google-chrome | [Google](https://www.google.com/chrome) | Google 官方 Chrome .deb 重打包；版本与 SHA256 从官方 apt 索引动态解析并由 makepkg 落地校验，打包逻辑对齐 AUR 同名包。`paru -Syu` 提示同版本"升级"时跳过 |
 | rtk | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | LLM token 节省代理，Rust musl 静态单文件零依赖。行为仿照官方 install.sh（302 解析 tag + checksums.txt 动态校验 + CWE-22 防御），装到 `/usr/bin/rtk`；装完删除手动装的 `~/.local/bin/rtk` |
@@ -43,35 +43,36 @@ sudo pacman -U *.pacman
 - `rtk-termux` 的 `arch=('aarch64')`，产物是 Android Bionic 二进制，**在 x86_64 主机上会被 pacman 的架构检查拦下**——这是刻意的保护，装进去会顶掉正常的 `/usr/bin/rtk`。
   给 Termux 用的话取 artifact 里的裸二进制 `rtk-aarch64-android` 即可，不需要走 pacman。
 ### 升级某个包
-编辑对应 `pkgs/<包名>/PKGBUILD` 的 `pkgver`，commit & push 即可自动重新构建。
-——仅以下固定版本的包需要这一步：
+所有包的 `pkgver` 均在构建时自动解析上游最新版（release tag / apt 索引 / 官网页面），
+**无需改任何文件**：上游发版后定时重建（每月 1 号）或手动 workflow_dispatch 指定包名
+即取当时最新版。解析失败或版本号格式异常会直接报错终止构建，不会打出错误版本。
 
-- 源是 GitHub tarball 的包（`wayland-pipewire-idle-inhibit-aur`）
-  必须同时更新 `sha256sums`：
-  ```bash
-  curl -sL <tarball url> | sha256sum
-  ```
-- 源是 GitHub release 附件的包（`dank-greeter`）：
-  改 `pkgver` 后用 release 页附带的 SHA256SUMS / *.sha256 更新 `sha256sums`。
+校验值的来源按包而异，均由 makepkg 下载后落地校验：
 
-其余包（`google-chrome`、`mark-shot`、`rtk`、`rtk-termux`、`we-layerd`、`wechat`、`zcode`）不需要
-"升级"：`pkgver` 在构建时从官网页面或 `releases/latest` 解析最新版（解析失败会直接
-报错终止，不会打出错误版本）。
-
-- `we-layerd` 的 deb 文件名与 SHA256 从该 tag 的 SHA256SUMS 动态解析，makepkg 落地
-  即校验（与 `rtk` 的 checksums.txt 同思路）。
-- `mark-shot` 的 x86_64 pkg.tar.zst 资产名与 SHA256 从该 tag 的 `*.pkg.tar.zst.sha256`
-  动态解析；上游若改了 pkgrel 导致常规命名探测落空，回退 release 资产页解析实际文件名。
-- `rtk-termux` 用 GitHub archive 源码 tarball（动态生成，官方不承诺内容寻址），
+- `google-chrome`：版本与 SHA256 从官方 apt `Packages` 索引解析。
+- `rtk`：deb/tarball 的 SHA256 从该 tag 的 `checksums.txt` 解析。
+- `we-layerd`：deb 文件名与 SHA256 从该 tag 的 `SHA256SUMS` 解析。
+- `mark-shot`：x86_64 pkg.tar.zst 资产名与 SHA256 从该 tag 的 `*.pkg.tar.zst.sha256`
+  解析；上游若改了 pkgrel 导致常规命名探测落空，回退 release 资产页解析实际文件名。
+- `dank-greeter`：二进制/completions 取上游 `*.sha256`；raw 源文件（LICENSE/README/
+  tmpfiles/示例配置）同次构建内流式计算 SHA256。
+- `wayland-pipewire-idle-inhibit-aur`：上游无 release 只有 tag，走 `git ls-remote`（不耗
+  API 配额）+ tags API 兜底，过滤语义化 tag 后 `sort -V` 取最新；tarball SHA256 同次
+  构建内流式计算，`prepare()` 再用 `Cargo.toml` 的 version 与 `pkgver` 对账。
+- `rtk-termux`：GitHub archive 源码 tarball 动态生成、官方不承诺内容寻址，
   `sha256sums` 为 `SKIP`；完整性由 `prepare()` 的体积下限 + `Cargo.toml`/`src/`
-  结构检查兜底。
-- `zcode`/`wechat` 使用浮动官方下载源，当前官网未提供可用于 PKGBUILD 的固定 SHA-256，
-  因此 `sha256sums` 为 `SKIP`；完整性由 `prepare()` 的体积下限、AppImage type-2 魔数
-  和解包后的关键文件检查兜底。源文件名包含版本号，避免固定下载 URL 在 CI 的
-  `SRCDEST` 缓存中复用旧版本。
+  结构检查（version 与 `pkgver` 对账）兜底。
+- `zcode`/`wechat`：官网未提供固定 SHA-256，`sha256sums` 为 `SKIP`；完整性由
+  `prepare()` 的体积下限、AppImage type-2 魔数和解包后的关键文件检查兜底。
+  源文件名包含版本号，避免固定下载 URL 在 CI 的 `SRCDEST` 缓存中复用旧版本。
 
-改了 `pkgver` 就属于改了 PKGBUILD，缓存 key 随之变化；但由于配了 `restore-keys`，
-会命中上一次的 `target/` 做**增量**重编（cargo 只重编变化的 crate），不是全量重编。
+自动解析版本的包若长期不重建，产物会停留在上次解析的版本；每月 1 号的全量定时
+重建已覆盖这一点。若上游改动导致解析失败（仓库换名、资产命名变化等），构建会
+报错终止——修 PKGBUILD 后 push 即可。
+
+上游若移动旧 tag，"解析校验值"与"makepkg 下载"两次独立请求间存在 TOCTOU 窗口，
+但校验不一致会直接构建失败，不会产出混版本产物；浮动源（`SKIP`）的包靠
+`prepare()` 的结构检查兜底。
 
 ## 构建加速
 

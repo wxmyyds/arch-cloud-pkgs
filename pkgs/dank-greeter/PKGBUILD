@@ -1,9 +1,10 @@
 # Maintainer: wxmyyds <wxmyyds0601@163.com>
 # 云端构建版 dank-greeter：DMS Greeter 登录界面，重打包上游官方预编译单二进制
-# （Go 静态二进制 + UI 内嵌，不耦合 glibc，无需月度重建，仅上游发版时升级）
-# 升级方法：改 pkgver 为上游新 tag，并更新 sha256sums——
-#          二进制和 completions 直接取 release 附带的 *.sha256 文件；
-#          LICENSE/README/tmpfiles/examples 用 curl -sL <url> | sha256sum 取值
+# （Go 静态二进制 + UI 内嵌，不耦合 glibc，无需月度重建；版本构建时自动跟随最新 release）
+# 升级方法：无需修改 pkgver；构建时解析 releases/latest 取最新 tag（302 + API 兜底），
+#          二进制/completions 的 SHA256 从 release 附带的 *.sha256 动态解析，
+#          LICENSE/README/tmpfiles/examples 等 raw 源文件流式计算 SHA256，
+#          makepkg 下载后落地即校验（同 rtk 包对 LICENSE 的做法）
 # 注意：本包替代旧包名 greetd-dms-greeter-bin（本机原为 v1.5.2 旧架构 bash wrapper
 #      + QML 树，新架构为单二进制内嵌 UI）。pacman -U 时按提示移除旧包即可；
 #      /etc/greetd/config.toml 归 greetd 包所有且命令行兼容，无需改动；
@@ -11,8 +12,60 @@
 
 pkgname=dank-greeter
 _binname=dms-greeter
-pkgver=1.6.2
 pkgrel=1
+
+_dank_greeter_latest_tag() {
+    local tag
+    tag="$(curl -fsSI -o /dev/null -w '%{redirect_url}' \
+        'https://github.com/AvengeMedia/dank-greeter/releases/latest' \
+        | sed -E 's|.*/tag/([^[:space:]]+).*|\1|' | tr -d '\r')"
+    if [[ -z "$tag" ]]; then
+        # 302 解析失败回退 GitHub API（releases/latest 只指向非 prerelease 稳定版）
+        tag="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+            'https://api.github.com/repos/AvengeMedia/dank-greeter/releases/latest' \
+            | awk '/"tag_name":/{print $2}' | tr -d ',"')"
+    fi
+    [[ -n "$tag" ]] || return 1
+    printf '%s\n' "$tag"
+}
+
+_tag="$(_dank_greeter_latest_tag)" || {
+    echo >&2 "!! 无法解析 dank-greeter 最新 release tag，网络或仓库结构可能已变化"
+    exit 1
+}
+pkgver="${_tag#v}"
+[[ "$pkgver" =~ ^[0-9]+(\.[0-9]+)+$ ]] || {
+    echo >&2 "!! 解析出版本号异常：${pkgver:-（空）}"
+    exit 1
+}
+
+# release 资产的 SHA256 直接取上游同名 *.sha256（首字段，64 位 hex 格式校验）；
+# raw 源文件（无上游校验文件）流式计算。均为同 tag 内容，随版本自动更新。
+_release_sha() {
+    local sha
+    sha="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+        "https://github.com/AvengeMedia/dank-greeter/releases/download/${_tag}/$1.sha256" \
+        | awk '{print $1}' | head -n1)"
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf '%s\n' "$sha"
+}
+_raw_sha() {
+    local sha
+    # pipefail：curl 失败时管道整体报错，防止把空输入（e3b0c442…）当成合法哈希
+    sha="$(set -o pipefail; curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+        "https://raw.githubusercontent.com/AvengeMedia/dank-greeter/${_tag}/$1" | sha256sum | cut -d' ' -f1)" || return 1
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf '%s\n' "$sha"
+}
+
+_lic_sha="$(_raw_sha LICENSE)"            || { echo >&2 "!! LICENSE 获取/校验失败"; exit 1; }
+_readme_sha="$(_raw_sha README.md)"       || { echo >&2 "!! README 获取/校验失败"; exit 1; }
+_tmpf_sha="$(_raw_sha assets/systemd/tmpfiles-$_binname.conf)" || { echo >&2 "!! tmpfiles 配置获取/校验失败"; exit 1; }
+_niri_sha="$(_raw_sha assets/examples/dms-niri.kdl)"  || { echo >&2 "!! dms-niri.kdl 获取/校验失败"; exit 1; }
+_hypr_sha="$(_raw_sha assets/examples/dms-hypr.conf)" || { echo >&2 "!! dms-hypr.conf 获取/校验失败"; exit 1; }
+_hyprl_sha="$(_raw_sha assets/examples/dms-hypr.lua)" || { echo >&2 "!! dms-hypr.lua 获取/校验失败"; exit 1; }
+_comp_sha="$(_release_sha "$_binname-completions-$pkgver.tar.gz")" || { echo >&2 "!! completions *.sha256 解析失败，上游资产名可能已变化"; exit 1; }
+_bin_sha="$(_release_sha "$_binname-linux-amd64.gz")" || { echo >&2 "!! 二进制 *.sha256 解析失败，上游资产名可能已变化"; exit 1; }
 pkgdesc='Greetd login screen with the Dank Material aesthetic (upstream prebuilt binary)'
 arch=('x86_64')
 url='https://github.com/AvengeMedia/dank-greeter'
@@ -34,24 +87,18 @@ options=('!strip' '!debug')
 install=dank-greeter.install
 
 source=(
-  "LICENSE-$pkgver::https://raw.githubusercontent.com/AvengeMedia/dank-greeter/v$pkgver/LICENSE"
-  "README-$pkgver.md::https://raw.githubusercontent.com/AvengeMedia/dank-greeter/v$pkgver/README.md"
-  "tmpfiles-$_binname-$pkgver.conf::https://raw.githubusercontent.com/AvengeMedia/dank-greeter/v$pkgver/assets/systemd/tmpfiles-$_binname.conf"
-  "dms-niri-$pkgver.kdl::https://raw.githubusercontent.com/AvengeMedia/dank-greeter/v$pkgver/assets/examples/dms-niri.kdl"
-  "dms-hypr-$pkgver.conf::https://raw.githubusercontent.com/AvengeMedia/dank-greeter/v$pkgver/assets/examples/dms-hypr.conf"
-  "dms-hypr-$pkgver.lua::https://raw.githubusercontent.com/AvengeMedia/dank-greeter/v$pkgver/assets/examples/dms-hypr.lua"
-  "$_binname-completions-$pkgver.tar.gz::https://github.com/AvengeMedia/dank-greeter/releases/download/v$pkgver/$_binname-completions-$pkgver.tar.gz"
+  "LICENSE-$pkgver::https://raw.githubusercontent.com/AvengeMedia/dank-greeter/${_tag}/LICENSE"
+  "README-$pkgver.md::https://raw.githubusercontent.com/AvengeMedia/dank-greeter/${_tag}/README.md"
+  "tmpfiles-$_binname-$pkgver.conf::https://raw.githubusercontent.com/AvengeMedia/dank-greeter/${_tag}/assets/systemd/tmpfiles-$_binname.conf"
+  "dms-niri-$pkgver.kdl::https://raw.githubusercontent.com/AvengeMedia/dank-greeter/${_tag}/assets/examples/dms-niri.kdl"
+  "dms-hypr-$pkgver.conf::https://raw.githubusercontent.com/AvengeMedia/dank-greeter/${_tag}/assets/examples/dms-hypr.conf"
+  "dms-hypr-$pkgver.lua::https://raw.githubusercontent.com/AvengeMedia/dank-greeter/${_tag}/assets/examples/dms-hypr.lua"
+  "$_binname-completions-$pkgver.tar.gz::https://github.com/AvengeMedia/dank-greeter/releases/download/${_tag}/$_binname-completions-$pkgver.tar.gz"
 )
-source_x86_64=("$_binname-linux-amd64-$pkgver.gz::https://github.com/AvengeMedia/dank-greeter/releases/download/v$pkgver/$_binname-linux-amd64.gz")
-
-sha256sums=('0c4c01a73eb7d2d1286a7e60e580dd53b605636dc46a57c9c3318e8e23efc676'
-            '21d460b29318eee3d2135eb431fd041a263ae7589e2de6b58e1bc66f771ec9ee'
-            '3dc267a18f22d06f595a80fb77275db56fe88c48b838db364ba3a1d307572a50'
-            '0376981f71a7331e3a8e5fdf71628f8c0e3881328969011f31fc1da6d54036c0'
-            'ae9e76c0a4af1390866e427de2eac9c9339115008790c06a6605022b0b82b89f'
-            '1262f1c8d5e3a19c05d0e5863c54181c7f2c9fe404d69b7ef0629e2c758ffc16'
-            'cc652f67d2c404a8bf987c7e624293c66d5aadcd2e8e18a784f12b0d1f2c8c61')
-sha256sums_x86_64=('74c2200f98c6e75ba92088c7e30dfea2b32758b6e5888f996a7e9a9688539a4d')
+source_x86_64=("$_binname-linux-amd64-$pkgver.gz::https://github.com/AvengeMedia/dank-greeter/releases/download/${_tag}/$_binname-linux-amd64.gz")
+# 全部随版本自动解析，无需人工维护（见上方 _raw_sha/_release_sha）
+sha256sums=("$_lic_sha" "$_readme_sha" "$_tmpf_sha" "$_niri_sha" "$_hypr_sha" "$_hyprl_sha" "$_comp_sha")
+sha256sums_x86_64=("$_bin_sha")
 
 package() {
   cd "${srcdir}"

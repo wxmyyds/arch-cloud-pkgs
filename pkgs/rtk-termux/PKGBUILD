@@ -12,7 +12,7 @@ pkgrel=1
 
 _rtk_latest_tag() {
     local tag
-    tag="$(curl -fsSLI -o /dev/null -w '%{redirect_url}' \
+    tag="$(curl -fsSI -o /dev/null -w '%{redirect_url}' \
         'https://github.com/rtk-ai/rtk/releases/latest' \
         | sed -E 's|.*/tag/([^[:space:]]+).*|\1|' | tr -d '\r')"
     if [[ -z "$tag" ]]; then
@@ -73,6 +73,15 @@ prepare() {
     [[ -d "rtk-$pkgver" ]] || { echo >&2 "!! 未找到源码目录 rtk-$pkgver，上游打包结构可能已变化"; return 1; }
     [[ -f "rtk-$pkgver/Cargo.toml" ]] || { echo >&2 "!! 未找到 Cargo.toml"; return 1; }
     [[ -d "rtk-$pkgver/src" ]] || { echo >&2 "!! 未找到 src/ 目录"; return 1; }
+    # 版本对账：tag 名与源码内 Cargo.toml 的 version 必须一致，
+    # 防止 SRCDEST 缓存复用旧包或上游移动 tag（tarball 文件名含版本号，
+    # 正常不会撞名，这里是对缓存失效/上游改名时的双重保险）
+    local toml_ver
+    toml_ver="$(awk -F'"' '/^version *=/{print $2; exit}' "rtk-$pkgver/Cargo.toml")"
+    [[ "$toml_ver" == "$pkgver" ]] || {
+        echo >&2 "!! Cargo.toml version ($toml_ver) 与 tag 版本 ($pkgver) 不一致"
+        return 1
+    }
 }
 
 build() {

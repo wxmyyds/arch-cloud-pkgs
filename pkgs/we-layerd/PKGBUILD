@@ -20,7 +20,7 @@ pkgrel=1
 
 _we_layerd_latest_tag() {
     local tag
-    tag="$(curl -fsSLI -o /dev/null -w '%{redirect_url}' \
+    tag="$(curl -fsSI -o /dev/null -w '%{redirect_url}' \
         'https://github.com/Aromatic05/we-layerd/releases/latest' \
         | sed -E 's|.*/tag/([^[:space:]]+).*|\1|' | tr -d '\r')"
     if [[ -z "$tag" ]]; then

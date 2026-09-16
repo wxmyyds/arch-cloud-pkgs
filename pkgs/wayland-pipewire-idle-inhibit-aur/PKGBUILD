@@ -1,14 +1,47 @@
 # Maintainer: wxmyyds <wxmyyds0601@163.com>
-# 云端构建版 wayland-pipewire-idle-inhibit：锁定上游 tag，本机零编译
-# 升级方法：改 pkgver 为上游新版本号，并用下面这条命令取新 tarball 的校验和
-#          curl -sL <tarball url> | sha256sum
+# 云端构建版 wayland-pipewire-idle-inhibit：版本构建时自动跟随上游最新 tag，本机零编译
+# 升级方法：无需修改 pkgver；构建时经 git ls-remote（API 兜底）取最新语义化 tag，
+#          tarball 的 SHA256 在同一次构建内流式计算（tag 若在解析与 makepkg 下载
+#          之间被移动，校验和不一致会直接构建失败，属安全侧失败），prepare() 再以
+#          Cargo.toml 的 version 与 pkgver 对账，防止解错版本
 # 注意：包名带 -aur 后缀以避免工作流 *.pkg.tar.zst 产物循环匹配；
 #       运行时包名/二进制不变（provides 原名）
 
 _pkgname=wayland-pipewire-idle-inhibit
 pkgname=${_pkgname}-aur
-pkgver=0.7.1
 pkgrel=1
+
+_wpii_latest_tag() {
+    local tag
+    # 主路径：git ls-remote 不耗 GitHub API 匿名配额（cron 全量重建时更耐用），
+    # 过滤出 vX.Y(.Z…) 语义化 tag 后 sort -V 取最大
+    tag="$(git ls-remote --tags "https://github.com/rafaelrc7/${_pkgname}" 2>/dev/null \
+        | grep -oE 'refs/tags/v[0-9]+(\.[0-9]+)+\^?$' \
+        | sed -E 's|refs/tags/v||; s|\^||' | sort -V | tail -n1)"
+    if [[ -n "$tag" ]]; then
+        printf '%s\n' "$tag"
+        return 0
+    fi
+    # 兜底：GitHub tags API（git 不可用时）
+    tag="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+        "https://api.github.com/repos/rafaelrc7/${_pkgname}/tags?per_page=100" \
+        | grep -oE '"name": "v[0-9]+(\.[0-9]+)+"' \
+        | awk '{gsub(/[",]/,"",$2); print $2}' \
+        | sed 's/^v//' | sort -V | tail -n1)"
+    [[ -n "$tag" ]] || return 1
+    printf '%s\n' "$tag"
+}
+
+_newver="$(_wpii_latest_tag)" || {
+    echo >&2 "!! 无法解析 wayland-pipewire-idle-inhibit 最新 tag，网络或仓库结构可能已变化"
+    exit 1
+}
+pkgver="$_newver"
+[[ "$pkgver" =~ ^[0-9]+(\.[0-9]+)+$ ]] || {
+    echo >&2 "!! 解析出版本号异常：${pkgver:-（空）}"
+    exit 1
+}
+
 pkgdesc="Inhibit wayland idle when computer is playing sound"
 arch=('x86_64')
 url="https://github.com/rafaelrc7/wayland-pipewire-idle-inhibit"
@@ -18,10 +51,20 @@ depends=('gcc-libs' 'glibc' 'libpipewire')
 makedepends=('rust' 'clang' 'wayland' 'wayland-protocols')
 provides=("${_pkgname}")
 conflicts=("${_pkgname}")
-source=("${_pkgname}-${pkgver}.tar.gz::https://github.com/rafaelrc7/${_pkgname}/archive/refs/tags/v${pkgver}.tar.gz")
-# 固定校验和：tarball 源不像 git tag 那样自带版本锚点，SKIP 会让上游移动 tag
-# 或仓库被接管时完全不可察觉
-sha256sums=('6644562aa9ac0210ae7203453f7d3d38fe9d74059e0864d60e13b45033dc2652')
+_tarball_url="https://github.com/rafaelrc7/${_pkgname}/archive/refs/tags/v${pkgver}.tar.gz"
+source=("${_pkgname}-${pkgver}.tar.gz::${_tarball_url}")
+# 上游无 release 校验文件可用，本次构建内流式计算 tarball SHA256（随版本自动更新）。
+# 该值不能防"tag 事后被移动"，但能防解析与下载之间 tag 变化的 TOCTOU：
+# 不一致时 makepkg 校验失败直接终止，不会打出混版本产物。
+_expected_sha="$(set -o pipefail; curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 "${_tarball_url}" | sha256sum | cut -d' ' -f1)" || {
+    echo >&2 "!! 下载/计算 tarball SHA256 失败"
+    exit 1
+}
+[[ "$_expected_sha" =~ ^[0-9a-f]{64}$ ]] || {
+    echo >&2 "!! SHA256 值异常：${_expected_sha:-（空）}"
+    exit 1
+}
+sha256sums=("$_expected_sha")
 
 # 关键：关闭 debug 包生成（否则 makepkg 自动产出 -debug 包）
 # + cargo release 二进制默认带完整 debug 符号（~700MB），
@@ -30,6 +73,14 @@ options=('!debug' '!emptydirs')
 
 prepare() {
     cd "$_pkgname-$pkgver"
+    # 版本对账：tag 名与源码内 Cargo.toml 的 version 必须一致，
+    # 防止上游 tag 与发布内容脱节（如打 tag 忘 bump）
+    local toml_ver
+    toml_ver="$(awk -F'"' '/^version *=/{print $2; exit}' Cargo.toml)"
+    [[ "$toml_ver" == "$pkgver" ]] || {
+        echo >&2 "!! Cargo.toml version ($toml_ver) 与 tag 版本 ($pkgver) 不一致"
+        return 1
+    }
     cargo fetch --locked --target "$(rustc --print host-tuple)"
 }
 
