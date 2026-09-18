@@ -119,8 +119,14 @@ depends=(
 # deb 的 Suggests: gnome-shell——GNOME 扩展随包安装，仅 GNOME 会话用到
 optdepends=('gnome-shell: GNOME 桌面壁纸集成（bundled 扩展 we-layerd@aromatic）')
 
+# patchelf 仅构建时重写 we-gui 的 NEEDED（libxdo.so.3 -> .so.4），不进 depends；
+# makepkg -s 在 CI 会自动安装
+makedepends=('patchelf')
+
 # 重打包保真：不剥离不拆分上游二进制（上游已 strip，二进制自带 RUNPATH 指向
 # 私有 CEF/DXC，strip 不影响加载，但按仓库约定保持逐字节一致）
+# 唯一的例外是 we-gui 的 libxdo.so.3 -> .so.4 重写（见 package() 注释）：
+# 只改 ELF 动态表（NEEDED 字符串等长替换），不碰代码段
 # deb 树内无空目录，留 !emptydirs 仅为布局保真
 options=('!strip' '!debug' '!emptydirs')
 
@@ -160,6 +166,22 @@ package() {
     # share/doc 下的 third-party/（CEF/DXC 许可全文）原样保留，copyright 内有引用
     install -Dm644 "$pkgdir/usr/share/doc/we-layerd/copyright" \
         "$pkgdir/usr/share/licenses/$pkgname/copyright"
+
+    # Ubuntu 预编译 we-gui 硬编码 NEEDED libxdo.so.3，但 Arch 的 xdotool
+    # 2026-03 起只提供 libxdo.so.4（SONAME bump）。实测 we-gui 仅用
+    # xdo_new/xdo_free/xdo_send_keysequence_window 三个符号，.so.4 均在位，
+    # 故等长重写 NEEDED 即可；等长替换不改变 ELF 布局，仅改动态表字符串。
+    # 上游若某天修好 deb（已是 .so.4），此分支自动跳过，保持幂等。
+    if objdump -p "$pkgdir/usr/bin/we-gui" | grep -q 'NEEDED.*libxdo\.so\.3'; then
+        patchelf --replace-needed libxdo.so.3 libxdo.so.4 "$pkgdir/usr/bin/we-gui"
+    fi
+    # 兜底：断言装包即能启动，不把缺库的坏包打出来；
+    # 上游若后续 bump 别的库，这里直接失败而不是静默产出坏包
+    if ldd "$pkgdir/usr/bin/we-gui" 2>/dev/null | grep -q 'not found'; then
+        echo >&2 "!! we-gui 仍有缺失的动态库："
+        ldd "$pkgdir/usr/bin/we-gui" 2>/dev/null | grep 'not found' >&2 || true
+        return 1
+    fi
 
     # 打印体积便于日志确认（内置 CEF 约占八成）
     du -sh "$pkgdir/usr/lib/cef" "$pkgdir/usr/lib/we-layerd" 2>/dev/null || true
