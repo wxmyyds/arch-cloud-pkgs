@@ -1,0 +1,199 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# 云端构建版 axolotl-launcher：开源跨平台 Minecraft 启动器（Rust + Tauri，
+# Modrinth 生态），重打包上游官方预编译 deb（amd64/arm64 双架构；主程序为
+# 动态链接 ELF，直连 libwebkit2gtk-4.1，依赖由官方仓库满足，本机零编译）。
+# 升级方法：无需修改 pkgver；构建时解析 releases/latest 取最新 tag（302 + API 兜底），
+#          deb 的 SHA256 从该 tag 的 release API assets[].digest 动态解析
+#          （实测与下载文件逐字节一致），COPYING.md 经 raw 流式计算，
+#          makepkg 落地即校验
+#
+# 注意：
+# - 上游 release 无 SHA256SUMS 聚合文件、deb 无附带 .sha256（仅 .sig 分离签名），
+#   API digest 是唯一的独立校验源；API 匿名配额耗尽时构建直接失败，不降级 SKIP
+# - deb 内文件名带空格（usr/bin/Axolotl Launcher 等），package() 按 AUR
+#   axolotl-launcher-bin 的思路归一化：二进制 -> /usr/bin/axolotl-launcher；
+#   上游自带 desktop（文件名带空格、Exec 为相对名）弃用，改用仓库内
+#   red.ghs.axolotl 命名的 desktop + mime xml；图标同步改名以匹配 Icon 查找
+# - AUR 有 axolotl-launcher（源码版）与 axolotl-launcher-bin（同思路 deb 重打包）：
+#   本包即 axolotl-launcher 本名，对 AUR 源码版为同名替换，conflicts -bin；
+#   年久失修的 axolotl-bin（停留在 1.5.0）一并 conflicts 防混装
+
+pkgname=axolotl-launcher
+pkgrel=1
+
+_axolotl_latest_tag() {
+    local tag
+    tag="$(curl -fsSI -o /dev/null -w '%{redirect_url}' \
+        'https://github.com/Mystic-Stars/Axolotl/releases/latest' \
+        | sed -E 's|.*/tag/([^[:space:]]+).*|\1|' | tr -d '\r')"
+    if [[ -z "$tag" ]]; then
+        # 302 解析失败回退 GitHub API（releases/latest 只指向非 prerelease 稳定版）
+        tag="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+            'https://api.github.com/repos/Mystic-Stars/Axolotl/releases/latest' \
+            | awk '/"tag_name":/{print $2}' | tr -d ',"')"
+    fi
+    [[ -n "$tag" ]] || return 1
+    printf '%s\n' "$tag"
+}
+
+_tag="$(_axolotl_latest_tag)" || {
+    echo >&2 "!! 无法解析 Axolotl 最新 release tag，网络或仓库结构可能已变化"
+    exit 1
+}
+pkgver="${_tag#v}"
+[[ "$pkgver" =~ ^[0-9]+(\.[0-9]+)+$ ]] || {
+    echo >&2 "!! 解析出版本号异常：${pkgver:-（空）}"
+    exit 1
+}
+
+# 同一 tag 的资产 digest 一次取回，避免 amd64/arm64 各打一次 API
+# （匿名配额紧张时少一次是一次）
+_tag_json="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+    "https://api.github.com/repos/Mystic-Stars/Axolotl/releases/tags/${_tag}")" || {
+    echo >&2 "!! 获取 release 资产信息失败（API 匿名配额可能耗尽），上游仓库结构可能已变化"
+    exit 1
+}
+_axolotl_deb_sha() {
+    local asset="$1" sha
+    sha="$(awk -v asset="$asset" '
+        /"name": "/ { name=$0 }
+        /"digest": "sha256:/ && index(name, asset) {
+            if (match($0, /sha256:[0-9a-f]{64}/)) { print substr($0, RSTART+7, 64); exit }
+        }' <<<"$_tag_json")"
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf '%s\n' "$sha"
+}
+_expected_sha_x86_64="$(_axolotl_deb_sha "Axolotl.Launcher_${pkgver}_amd64.deb")" || {
+    echo >&2 "!! 未找到 Axolotl.Launcher_${pkgver}_amd64.deb 的 digest，上游资产命名可能已变化"
+    exit 1
+}
+_expected_sha_aarch64="$(_axolotl_deb_sha "Axolotl.Launcher_${pkgver}_arm64.deb")" || {
+    echo >&2 "!! 未找到 Axolotl.Launcher_${pkgver}_arm64.deb 的 digest，上游资产命名可能已变化"
+    exit 1
+}
+# COPYING.md 无上游校验文件，raw 流式计算（同 dank-greeter）；源文件名带版本号，
+# 避免固定 URL 在 CI 的 SRCDEST 缓存中复用旧版本
+_license_sha="$(set -o pipefail; curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+    "https://raw.githubusercontent.com/Mystic-Stars/Axolotl/${_tag}/COPYING.md" | sha256sum | cut -d' ' -f1)" || {
+    echo >&2 "!! COPYING.md 获取失败"
+    exit 1
+}
+[[ "$_license_sha" =~ ^[0-9a-f]{64}$ ]] || {
+    echo >&2 "!! COPYING.md 哈希异常"
+    exit 1
+}
+
+pkgdesc="A free, cross-platform Minecraft launcher built on the Modrinth ecosystem (upstream prebuilt deb repack)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Mystic-Stars/Axolotl"
+# 上游 COPYING.md 明确 desktop packages 为 GPL-3.0-only，与 AUR 两包一致
+license=('GPL-3.0-only')
+depends=(
+    # deb control Depends 的 Arch 映射（主程序 NEEDED 实测直连 webkit/gtk 栈）
+    'webkit2gtk-4.1'
+    'gtk3'
+    'libayatana-appindicator'
+    # AUR -bin 额外声明（Tauri 通知后端）
+    'libnotify'
+    # 自带 mime xml / hicolor 图标的安装基础设施
+    'shared-mime-info'
+    'hicolor-icon-theme'
+)
+# AUR 同思路预编译版；对本机已装的 AUR axolotl-launcher（源码版）而言本包是同名替换
+conflicts=('axolotl-launcher-bin' 'axolotl-bin')
+provides=("axolotl-launcher-bin=$pkgver")
+# desktop 改写后校验
+makedepends=('desktop-file-utils')
+
+# 重打包保真：不剥离不拆分上游二进制
+options=('!strip' '!debug' '!emptydirs')
+
+source=(
+    "COPYING-$pkgver.md::https://raw.githubusercontent.com/Mystic-Stars/Axolotl/${_tag}/COPYING.md"
+    'axolotl-launcher.desktop'
+    'red.ghs.axolotl.xml'
+)
+# 上游资产名已按架构区分（amd64/arm64），无需二次重命名；版本号在文件名内，
+# 避免固定 URL 在 CI 的 SRCDEST 缓存中复用旧版本
+source_x86_64=("https://github.com/Mystic-Stars/Axolotl/releases/download/${_tag}/Axolotl.Launcher_${pkgver}_amd64.deb")
+source_aarch64=("https://github.com/Mystic-Stars/Axolotl/releases/download/${_tag}/Axolotl.Launcher_${pkgver}_arm64.deb")
+# desktop 与 mime xml 为仓库内静态文件（与 AUR -bin 同内容），哈希固定；
+# 其余三项随版本自动解析，无需人工维护
+sha256sums=(
+    "$_license_sha"
+    '9a98c15cb4f1a3cec9a893be5950600b1e6fa3b6029df3a2cae88b150636520b'
+    'a3c7ac4b8489dff5a8e558780765648dccc99c8a65b13e6dd11777de8352da7f'
+)
+sha256sums_x86_64=("$_expected_sha_x86_64")
+sha256sums_aarch64=("$_expected_sha_aarch64")
+
+prepare() {
+    cd "$srcdir"
+    # 当前架构的 deb 在 srcdir 内必须唯一在位（不硬编码 amd64/arm64，glob 断言）
+    local debs=( Axolotl.Launcher_*.deb )
+    (( ${#debs[@]} == 1 )) || { echo >&2 "!! deb 数量异常，上游资产命名可能已变化"; return 1; }
+    local deb="${debs[0]}"
+
+    [[ -f "$deb" ]] || { echo >&2 "!! 源 deb 缺失，下载未落盘"; return 1; }
+    local size
+    size="$(stat -L -c%s "$deb")"
+    if (( size < 52428800 )); then
+        echo >&2 "!! deb 体积异常（${size} 字节），疑似错误响应页"
+        return 1
+    fi
+    # deb 是 ar 归档：魔数 '!<arch>'（第 8 字节为换行，命令替换会去尾，故取 7 字节）
+    if [[ "$(dd if="$deb" bs=1 count=7 2>/dev/null)" != '!<arch>' ]]; then
+        echo >&2 "!! ar 魔数校验失败，疑似非官方 deb"
+        return 1
+    fi
+    # makepkg 对 ar 归档按内容探测用 bsdtar 解出三个成员，断言关键成员在位
+    [[ -f data.tar.gz ]] || { echo >&2 "!! data.tar.gz 未被解出"; return 1; }
+}
+
+package() {
+    cd "$srcdir"
+    # 第二层解包：data.tar.gz，整树落位
+    bsdtar -xf data.tar.gz -C "$pkgdir/"
+
+    # 主程序文件名带空格，不适合直接做入口，先断言在位再改名
+    [[ -f "$pkgdir/usr/bin/Axolotl Launcher" ]] || {
+        echo >&2 "!! 主程序缺失，上游 deb 布局可能已变化"
+        return 1
+    }
+    mv "$pkgdir/usr/bin/Axolotl Launcher" "$pkgdir/usr/bin/axolotl-launcher"
+    [[ -x "$pkgdir/usr/bin/axolotl-launcher" ]] || { echo >&2 "!! 入口不可执行"; return 1; }
+
+    # 弃用上游自带 desktop（文件名带空格、Exec 为无路径相对名），改用仓库内文件；
+    # sed 落空则报错，防止静默打出桌面项损坏的包
+    rm -f "$pkgdir/usr/share/applications/Axolotl Launcher.desktop"
+    install -Dm644 "axolotl-launcher.desktop" "$pkgdir/usr/share/applications/axolotl-launcher.desktop"
+    install -Dm644 "red.ghs.axolotl.xml" "$pkgdir/usr/share/mime/packages/red.ghs.axolotl.xml"
+    if ! grep -q '^Exec=axolotl-launcher %U$' "$pkgdir/usr/share/applications/axolotl-launcher.desktop"; then
+        echo >&2 "!! desktop Exec 异常，仓库内 desktop 文件可能被误改"
+        return 1
+    fi
+    desktop-file-validate "$pkgdir/usr/share/applications/axolotl-launcher.desktop"
+
+    # 图标改名以匹配 Icon=red.ghs.axolotl（上游自带两档尺寸，缺一即失败，
+    # 不产出图标损坏的包）
+    mv "$pkgdir/usr/share/icons/hicolor/128x128/apps/Axolotl Launcher.png" \
+        "$pkgdir/usr/share/icons/hicolor/128x128/apps/red.ghs.axolotl.png" || {
+        echo >&2 "!! 128 图标缺失，上游 deb 布局可能已变化"
+        return 1
+    }
+    mv "$pkgdir/usr/share/icons/hicolor/256x256@2/apps/Axolotl Launcher.png" \
+        "$pkgdir/usr/share/icons/hicolor/256x256@2/apps/red.ghs.axolotl.png" || {
+        echo >&2 "!! 256 图标缺失，上游 deb 布局可能已变化"
+        return 1
+    }
+
+    # 兜底：断言装包即能启动，不把缺库的坏包打出来；
+    # 上游若后续新增系统库依赖，这里直接失败而不是静默产出坏包
+    if ldd "$pkgdir/usr/bin/axolotl-launcher" 2>/dev/null | grep -q 'not found'; then
+        echo >&2 "!! 主程序仍有缺失的动态库："
+        ldd "$pkgdir/usr/bin/axolotl-launcher" 2>/dev/null | grep 'not found' >&2 || true
+        return 1
+    fi
+
+    install -Dm644 "COPYING-$pkgver.md" "$pkgdir/usr/share/licenses/$pkgname/COPYING.md"
+}

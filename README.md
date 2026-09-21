@@ -15,6 +15,7 @@
 | mark-shot | [jswysnemc/mark-shot](https://github.com/jswysnemc/mark-shot) | Qt6 Wayland 截图标注工具，重打包上游官方预编译 Arch 包（依赖、layer-shell 库与翻译插件齐全，二进制字节保真），版本构建时跟随最新 release。conflicts AUR `mark-shot-bin`；对本机已装 AUR `mark-shot` 为同名升级 |
 | google-chrome | [Google](https://www.google.com/chrome) | Google 官方 Chrome .deb 重打包；版本与 SHA256 从官方 apt 索引动态解析并由 makepkg 落地校验，打包逻辑对齐 AUR 同名包。`paru -Syu` 提示同版本"升级"时跳过 |
 | rtk | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | LLM token 节省代理，Rust musl 静态单文件零依赖。行为仿照官方 install.sh（302 解析 tag + checksums.txt 动态校验 + CWE-22 防御），装到 `/usr/bin/rtk`；装完删除手动装的 `~/.local/bin/rtk` |
+| axolotl-launcher | [Mystic-Stars/Axolotl](https://github.com/Mystic-Stars/Axolotl) | 开源跨平台 Minecraft 启动器（Rust + Tauri，Modrinth 生态），重打包上游官方预编译 deb（amd64/arm64 双架构），版本构建时跟随最新 release。conflicts AUR `axolotl-launcher-bin`；对本机已装 AUR `axolotl-launcher`（源码版）为同名升级 |
 
 ## 使用方法
 
@@ -65,6 +66,10 @@ sudo pacman -U *.pacman
 - `zcode`/`wechat`：官网未提供固定 SHA-256，`sha256sums` 为 `SKIP`；完整性由
   `prepare()` 的体积下限、AppImage type-2 魔数和解包后的关键文件检查兜底。
   源文件名包含版本号，避免固定下载 URL 在 CI 的 `SRCDEST` 缓存中复用旧版本。
+- `axolotl-launcher`：deb 的 SHA256 从该 tag 的 release API `assets[].digest`
+  动态解析（上游无 SHA256SUMS 聚合文件、deb 无附带 `.sha256`，API digest 是唯一
+  独立校验源，实测与下载文件逐字节一致）；`COPYING.md` 经 raw 流式计算；
+  仓库内静态文件（desktop、mime xml）哈希固定。
 
 自动解析版本的包若长期不重建，产物会停留在上次解析的版本；每月 1 号的全量定时
 重建已覆盖这一点。若上游改动导致解析失败（仓库换名、资产命名变化等），构建会
