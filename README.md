@@ -11,7 +11,7 @@
 | rtk-termux | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | 交叉编译的 Termux aarch64 版（上游只发 gnu/musl 预编译，没有 Bionic），版本构建时跟随最新 release。**不要在本机 Arch 上安装**，见下 |
 | zcode | [Z.ai](https://zcode.z.ai) | Z.ai 官方 Electron 桌面应用重打包（AppImage → 原生包）。版本自动跟最新：上游发版**无需改文件**，定时重建或手动触发即取当时最新。与 AUR `z-code-bin` 互为冲突，安装时 pacman 会提示替换 |
 | wechat | [腾讯微信](https://linux.weixin.qq.com/) | 腾讯官方微信 Linux x86_64 AppImage 重打包为原生包；仅支持 x86_64，版本自动跟随官网，ARM 版暂未接入 |
-| dank-greeter | [AvengeMedia/dank-greeter](https://github.com/AvengeMedia/dank-greeter) | DMS Greeter 登录界面，重打包上游官方预编译 Go 单二进制（UI 内嵌，无 QML 树），版本构建时跟随最新 release。替代旧包名 `greetd-dms-greeter-bin`，装完需 `sudo dms-greeter sync`；静态二进制不耦合 glibc |
+| noctalia-greeter | [noctalia-dev/noctalia-greeter](https://github.com/noctalia-dev/noctalia-greeter) | Noctalia 官方 greetd 登录界面（C++20 + wlroots 合成器），源码编译，版本构建时自动跟随上游最新 tag。替代旧包 `dank-greeter`（DMS 登录界面）；装完编辑 `/etc/greetd/config.toml` 指向 `noctalia-greeter-session` |
 | mark-shot | [jswysnemc/mark-shot](https://github.com/jswysnemc/mark-shot) | Qt6 Wayland 截图标注工具，重打包上游官方预编译 Arch 包（依赖、layer-shell 库与翻译插件齐全，二进制字节保真），版本构建时跟随最新 release。conflicts AUR `mark-shot-bin`；对本机已装 AUR `mark-shot` 为同名升级 |
 | google-chrome | [Google](https://www.google.com/chrome) | Google 官方 Chrome .deb 重打包；版本与 SHA256 从官方 apt 索引动态解析并由 makepkg 落地校验，打包逻辑对齐 AUR 同名包。`paru -Syu` 提示同版本"升级"时跳过 |
 | rtk | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | LLM token 节省代理，Rust musl 静态单文件零依赖。行为仿照官方 install.sh（302 解析 tag + checksums.txt 动态校验 + CWE-22 防御），装到 `/usr/bin/rtk`；装完删除手动装的 `~/.local/bin/rtk` |
@@ -55,8 +55,9 @@ sudo pacman -U *.pacman
 - `we-layerd`：deb 文件名与 SHA256 从该 tag 的 `SHA256SUMS` 解析。
 - `mark-shot`：x86_64 pkg.tar.zst 资产名与 SHA256 从该 tag 的 `*.pkg.tar.zst.sha256`
   解析；上游若改了 pkgrel 导致常规命名探测落空，回退 release 资产页解析实际文件名。
-- `dank-greeter`：二进制/completions 取上游 `*.sha256`；raw 源文件（LICENSE/README/
-  tmpfiles/示例配置）同次构建内流式计算 SHA256。
+- `noctalia-greeter`：上游无 release 只有 tag，走 `git ls-remote`（不耗 API 配额）
+  + tags API 兜底，过滤语义化 tag 后 `sort -V` 取最新；tarball SHA256 同次构建内
+  流式计算，`prepare()` 再用 `meson.build` 的 project version 与 `pkgver` 对账。
 - `wayland-pipewire-idle-inhibit-aur`：上游无 release 只有 tag，走 `git ls-remote`（不耗
   API 配额）+ tags API 兜底，过滤语义化 tag 后 `sort -V` 取最新；tarball SHA256 同次
   构建内流式计算，`prepare()` 再用 `Cargo.toml` 的 version 与 `pkgver` 对账。
@@ -95,7 +96,7 @@ sudo pacman -U *.pacman
 ```bash
 mkdir pkgs/<新包名>
 # 参照已有包的 PKGBUILD 编写：源码构建参照 wayland-pipewire-idle-inhibit-aur，
-# 预编译重打包参照 we-layerd（deb）/ mark-shot（现成 pacman 包）/ dank-greeter（裸二进制）
+# 预编译重打包参照 we-layerd（deb）/ mark-shot（现成 pacman 包）；源码编译参照 noctalia-greeter（meson）
 git add && git commit && git push   # 自动触发构建
 ```
 

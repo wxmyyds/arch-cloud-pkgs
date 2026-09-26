@@ -1,0 +1,121 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# 云端构建版 noctalia-greeter：Noctalia 官方 greetd 登录界面（C++20 + wlroots 合成器）
+# 参照 AUR noctalia-greeter，但版本构建时自动跟随上游最新 tag：
+#   tag 解析走 git ls-remote（不耗 GitHub API 匿名配额，cron 全量重建更耐用）+ tags API 兜底，
+#   tarball SHA256 在同一次构建内流式计算；prepare() 再以 meson.build 的
+#   project version 与 pkgver 对账，防止解错版本
+# 替代本仓库旧包 dank-greeter（DMS 登录界面）：装完本包后编辑 /etc/greetd/config.toml
+#   指向 noctalia-greeter-session（见 post_install 提示），可顺手移除 dank-greeter
+
+_pkgname=noctalia-greeter
+pkgname=$_pkgname
+pkgrel=1
+
+_ng_latest_tag() {
+    local tag
+    # 主路径：git ls-remote，过滤 vX.Y(.Z…) 语义化 tag 后 sort -V 取最大
+    tag="$(git ls-remote --tags "https://github.com/noctalia-dev/${_pkgname}" 2>/dev/null \
+        | grep -oE 'refs/tags/v[0-9]+(\.[0-9]+)+\^?$' \
+        | sed -E 's|refs/tags/v||; s|\^||' | sort -V | tail -n1)"
+    if [[ -n "$tag" ]]; then
+        printf '%s\n' "$tag"
+        return 0
+    fi
+    # 兜底：GitHub tags API（git 不可用时）
+    tag="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+        "https://api.github.com/repos/noctalia-dev/${_pkgname}/tags?per_page=100" \
+        | grep -oE '"name": "v[0-9]+(\.[0-9]+)+"' \
+        | awk '{gsub(/[",]/,"",$2); print $2}' \
+        | sed 's/^v//' | sort -V | tail -n1)"
+    [[ -n "$tag" ]] || return 1
+    printf '%s\n' "$tag"
+}
+
+_tag="$(_ng_latest_tag)" || {
+    echo >&2 "!! 无法解析 ${_pkgname} 最新 tag，网络或仓库结构可能已变化"
+    exit 1
+}
+pkgver="$_tag"
+[[ "$pkgver" =~ ^[0-9]+(\.[0-9]+)+$ ]] || {
+    echo >&2 "!! 解析出版本号异常：${pkgver:-（空）}"
+    exit 1
+}
+
+pkgdesc='Minimal greetd login greeter with a bundled wlroots compositor'
+arch=('x86_64' 'aarch64')
+url="https://github.com/noctalia-dev/${_pkgname}"
+license=('MIT')
+depends=(
+  'cairo'
+  'dbus'
+  'fontconfig'
+  'freetype2'
+  'glib2'
+  'glibc'
+  'greetd'
+  'libglvnd'
+  'librsvg'
+  'libwebp'
+  'libxkbcommon'
+  'libxml2'
+  'pango'
+  'tomlplusplus'
+  'wayland'
+  'wlroots0.20'
+)
+makedepends=(
+  'meson'
+  'ninja'
+  'nlohmann-json'
+  'pkgconf'
+  'stb'
+  'wayland-protocols'
+)
+optdepends=(
+  'noctalia: Wallpaper and palette sync from Noctalia'
+)
+provides=("$_pkgname")
+conflicts=("$_pkgname-git" "$_pkgname-bin" 'dank-greeter')
+options=('!debug')
+install=noctalia-greeter.install
+
+_tarball_url="${url}/archive/refs/tags/v${pkgver}.tar.gz"
+source=("${_pkgname}-${pkgver}.tar.gz::${_tarball_url}")
+# 上游无 release 校验文件，本次构建内流式计算 tarball SHA256（随版本自动更新）；
+# 与 wayland-pipewire-idle-inhibit-aur 同款：防解析与下载之间 tag 变化的 TOCTOU，
+# 不一致时 makepkg 校验失败直接终止，不会打出混版本产物
+_expected_sha="$(set -o pipefail; curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 "${_tarball_url}" | sha256sum | cut -d' ' -f1)" || {
+    echo >&2 "!! 下载/计算 tarball SHA256 失败"
+    exit 1
+}
+[[ "$_expected_sha" =~ ^[0-9a-f]{64}$ ]] || {
+    echo >&2 "!! SHA256 值异常：${_expected_sha:-（空）}"
+    exit 1
+}
+sha256sums=("$_expected_sha")
+
+prepare() {
+    cd "${_pkgname}-${pkgver}"
+    # 版本对账：tag 名与源码内 meson.build 的 project version 必须一致，
+    # 防止上游 tag 与发布内容脱节
+    local meson_ver
+    meson_ver="$(sed -nE "s/^[[:space:]]*version:[[:space:]]*'([^']+)'.*/\1/p" meson.build | head -n1)"
+    [[ "$meson_ver" == "$pkgver" ]] || {
+        echo >&2 "!! meson.build version (${meson_ver:-未解析}) 与 tag 版本 ($pkgver) 不一致"
+        return 1
+    }
+}
+
+build() {
+    CXXFLAGS+=" -Wno-unused-result"
+    arch-meson "${_pkgname}-${pkgver}" build-release \
+      -Db_ndebug=true
+    meson compile -C build-release
+}
+
+package() {
+    meson install -C build-release --destdir "${pkgdir}"
+
+    install -Dm644 "${_pkgname}-${pkgver}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+    install -Dm644 "${_pkgname}-${pkgver}/README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+}

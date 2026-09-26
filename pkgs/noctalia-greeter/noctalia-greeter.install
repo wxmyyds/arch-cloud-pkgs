@@ -1,0 +1,33 @@
+# Post-install helpers for noctalia-greeter
+
+_greeter_setup() {
+  if [[ ! -x /usr/bin/noctalia-greeter-apply-appearance ]]; then
+    return 0
+  fi
+
+  NOCTALIA_GREETER_SESSION_BIN=/usr/bin/noctalia-greeter-session \
+    /usr/share/noctalia-greeter/setup_greeter_system.sh || true
+}
+
+_greetd_hint() {
+  echo ""
+  echo "==> Edit /etc/greetd/config.toml:"
+  echo ""
+  echo "    [default_session]"
+  echo "    command = \"/usr/bin/noctalia-greeter-session -- --session niri\""
+  echo "    user = \"greeter\""
+  echo ""
+  echo "==> Then restart greetd:  sudo systemctl restart greetd"
+  echo ""
+}
+
+post_install() {
+  _greeter_setup
+  _greetd_hint
+}
+
+post_upgrade() {
+  _greeter_setup
+  echo "==> noctalia-greeter updated; restart greetd if already configured."
+  _greetd_hint
+}
