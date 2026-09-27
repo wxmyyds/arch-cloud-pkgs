@@ -9,7 +9,6 @@
 | we-layerd | [Aromatic05/we-layerd](https://github.com/Aromatic05/we-layerd) | 原生 Wallpaper Engine 运行时（scene/video/web，支持 niri）。重打包上游官方预编译 deb，内置私有 CEF/DXC 运行时，版本构建时跟随最新 release。**不再需要 AUR 依赖** |
 | wayland-pipewire-idle-inhibit-aur | [rafaelrc7/wayland-pipewire-idle-inhibit](https://github.com/rafaelrc7/wayland-pipewire-idle-inhibit) | 播放声音时抑制 Wayland idle（包名带 `-aur` 后缀以避免产物匹配问题，`provides` 原包名），版本构建时跟随最新 tag，源码编译 |
 | rtk-termux | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | 交叉编译的 Termux aarch64 版（上游只发 gnu/musl 预编译，没有 Bionic），版本构建时跟随最新 release。**不要在本机 Arch 上安装**，见下 |
-| zcode | [Z.ai](https://zcode.z.ai) | Z.ai 官方 Electron 桌面应用重打包（AppImage → 原生包）。版本自动跟最新：上游发版**无需改文件**，定时重建或手动触发即取当时最新。与 AUR `z-code-bin` 互为冲突，安装时 pacman 会提示替换 |
 | wechat | [腾讯微信](https://linux.weixin.qq.com/) | 腾讯官方微信 Linux x86_64 AppImage 重打包为原生包；仅支持 x86_64，版本自动跟随官网，ARM 版暂未接入 |
 | noctalia-greeter | [noctalia-dev/noctalia-greeter](https://github.com/noctalia-dev/noctalia-greeter) | Noctalia 官方 greetd 登录界面（C++20 + wlroots 合成器），源码编译，版本构建时自动跟随上游最新 tag。替代旧包 `dank-greeter`（DMS 登录界面）；装完编辑 `/etc/greetd/config.toml` 指向 `noctalia-greeter-session` |
 | mark-shot | [jswysnemc/mark-shot](https://github.com/jswysnemc/mark-shot) | Qt6 Wayland 截图标注工具，重打包上游官方预编译 Arch 包（依赖、layer-shell 库与翻译插件齐全，二进制字节保真），版本构建时跟随最新 release。conflicts AUR `mark-shot-bin`；对本机已装 AUR `mark-shot` 为同名升级 |
@@ -64,7 +63,7 @@ sudo pacman -U *.pacman
 - `rtk-termux`：GitHub archive 源码 tarball 动态生成、官方不承诺内容寻址，
   `sha256sums` 为 `SKIP`；完整性由 `prepare()` 的体积下限 + `Cargo.toml`/`src/`
   结构检查（version 与 `pkgver` 对账）兜底。
-- `zcode`/`wechat`：官网未提供固定 SHA-256，`sha256sums` 为 `SKIP`；完整性由
+- `wechat`：官网未提供固定 SHA-256，`sha256sums` 为 `SKIP`；完整性由
   `prepare()` 的体积下限、AppImage type-2 魔数和解包后的关键文件检查兜底。
   源文件名包含版本号，避免固定下载 URL 在 CI 的 `SRCDEST` 缓存中复用旧版本。
 - `axolotl-launcher`：deb 的 SHA256 从该 tag 的 release API `assets[].digest`
