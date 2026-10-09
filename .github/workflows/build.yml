@@ -30,7 +30,9 @@ jobs:
   # ---- 选包 job：跑在裸 ubuntu 上（不进 arch 容器），只算"本次要构建哪些包"，
   #      输出 JSON 数组给 build 的 matrix 用；空数组时 build 直接跳过
   select:
-    runs-on: ubuntu-latest
+    # 固定 runner 镜像版本：ubuntu-latest 会在 2026-10-19 起浮动到 Ubuntu 26，
+    # 选包逻辑不依赖新镜像，但浮动标签会带来不确定性并触发弃用告警
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       pkgs: ${{ steps.select.outputs.json }}
@@ -105,7 +107,7 @@ jobs:
   build:
     needs: select
     if: needs.select.outputs.pkgs != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     container:
       image: archlinux:base-devel
