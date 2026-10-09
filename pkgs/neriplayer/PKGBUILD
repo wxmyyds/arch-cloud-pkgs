@@ -1,0 +1,221 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# 云端构建版 neriplayer：NeriPlayer Desktop（Tauri 2 + Vue 3 + Rust 音频引擎，
+# 网易云 / QQ 音乐 / Bilibili / YouTube Music 多源在线播放）官方预编译 deb 重打包，
+# 内置私有 FFmpeg 解码库（usr/lib/NeriPlayer/ffmpeg/，dlopen 加载），零编译零依赖污染。
+#
+# 上游是 WIP 项目、无 release：安装包只能从 GitHub Actions 的 Artifacts 工作流
+# （artifacts.yml）获取，构建产物以 zip artifact（NeriPlayer-Linux-x64，仅保留
+# 3 天）发布。本包经 nightly.link（oprypin 长期维护的公共服务，为匿名访客提供
+# 公开仓库 artifact 的"最近一次成功构建"下载链接）取 main 分支最新构建的 zip，
+# 解出 deb 重打包。版本号 = 上游应用版本（deb 文件名/control）+ 构建 epoch
+# （zip 内 build-metadata.txt 的 build_epoch），每次构建自动跟随当时最新构建，
+# pacman 侧保持单调升级（.r<epoch> 数值递增）。
+#
+# 升级方法：无需修改 pkgver；每月定时重建或手动 workflow_dispatch 指定 neriplayer
+#          即取当时最新构建。上游 artifact 仅保留 3 天：距上游最近一次成功构建
+#          超过 3 天后 nightly.link 返回 404，构建报错终止（属预期，等上游再发
+#          构建即可）；已装旧包不受影响。
+#
+# 校验：zip 内容随构建浮动、GitHub 不给匿名 artifact 摘要，sha256sums 用 SKIP
+#       （同 wechat/rtk-termux 浮动源策略）；完整性由 zip/ar/deb 魔数 + 体积下限
+#       + deb 结构 + 版本对账（control Version 与文件名版本、zip 内 build-metadata
+#       与解析时的版本一致）+ 装包后 ldd 兜底；主许可证 GPL-3.0 从该次构建的
+#       build_git_sha 对应 raw 流式计算 SHA256，makepkg 落地即校验。
+
+pkgname=neriplayer
+pkgrel=1
+
+pkgdesc="A multi-source online music player for Windows/macOS/Linux (Tauri 2 + Vue 3 + Rust audio engine) — upstream prebuilt deb repack"
+arch=('x86_64')
+url="https://github.com/cwuom/NeriPlayer-Desktop"
+# 上游仓库 LICENSE 为标准 GPL-3.0 全文（GitHub 亦标记 GPL-3.0）；内置 FFmpeg 的
+# LGPL 许可随捆绑文件保留在 /usr/lib/NeriPlayer/ffmpeg/LICENSE.txt 原位
+license=('GPL-3.0-only')
+depends=(
+    # 主程序 ELF 直接 NEEDED（debian control Depends 的 Arch 映射，实测逐项核对）：
+    'webkit2gtk-4.1'   # libwebkit2gtk-4.1.so.0 / libjavascriptcoregtk-4.1.so.0
+    'gtk3'             # libgtk-3.so.0 / libgdk-3.so.0
+    'libsoup3'         # libsoup-3.0.so.0
+    'alsa-lib'         # libasound.so.2
+    'dbus'             # libdbus-1.so.3
+    'openssl'          # libssl.so.3 / libcrypto.so.3
+    'gcc-libs'         # libstdc++.so.6 / libgcc_s.so.1
+    # glib2/gdk-pixbuf2/cairo/pango 等其余 NEEDED 由上述依赖的依赖闭包满足
+    'hicolor-icon-theme'  # 随包安装 hicolor 图标的基础目录
+)
+makedepends=('desktop-file-utils')
+# 重打包保真：不剥离不拆分上游二进制（内置 ffmpeg 解码库与主程序逐字节一致）
+options=('!strip' '!debug' '!emptydirs')
+
+# ---- 版本解析：取 upstream Artifacts 工作流最近一次成功构建的 zip artifact ----
+# nightly.link 无需登录，URL 结构固定：.../workflows/<workflow 文件名>/<分支>/<artifact 名>
+_zip_url='https://nightly.link/cwuom/NeriPlayer-Desktop/workflows/artifacts.yml/main/NeriPlayer-Linux-x64.zip'
+_zip_download='NeriPlayer-Linux-x64.zip'
+
+# 幂等下载：zip 已存在（makepkg 重复 source PKGBUILD）则跳过，不二次下载 200MB
+if [[ ! -s "$_zip_download" ]]; then
+    curl -fSL --connect-timeout 15 --max-time 900 --retry 2 --retry-delay 3 \
+        -o "$_zip_download" "$_zip_url" || {
+        echo >&2 "!! 无法从 nightly.link 下载 NeriPlayer 最新构建 zip（404 = 上游 artifact 已过期或工作流改名）"
+        exit 1
+    }
+fi
+# 结构与体积校验：魔数 PK + 体积下限，拦截错误响应页/截断文件
+if [[ "$(dd if="$_zip_download" bs=1 count=2 2>/dev/null)" != 'PK' ]]; then
+    echo >&2 "!! zip 魔数校验失败，nightly.link 可能返回了错误页"
+    exit 1
+fi
+if (( $(stat -L -c%s "$_zip_download") < 104857600 )); then
+    echo >&2 "!! zip 体积异常，疑似错误响应或截断"
+    exit 1
+fi
+
+# 只取 zip 内 build-metadata.txt（不整包解压），解析构建元数据：
+#   build_epoch（该次构建的 unix 秒，四个平台共享）→ pkgver 的 .r 后缀（单调递增）
+#   build_git_sha（40 位 hex）→ LICENSE 的 raw 取源 commit
+bsdtar -xOf "$_zip_download" build-metadata.txt > build-metadata.txt 2>/dev/null || {
+    echo >&2 "!! zip 内缺少 build-metadata.txt，上游 artifact 结构可能已变化"
+    exit 1
+}
+_build_epoch="$(awk -F= '$1=="build_epoch" {print $2}' build-metadata.txt | tr -d '\r')"
+_build_sha="$(awk -F= '$1=="build_git_sha" {print $2}' build-metadata.txt | tr -d '\r')"
+[[ "$_build_epoch" =~ ^[0-9]+$ ]] || {
+    echo >&2 "!! build_epoch 解析失败：${_build_epoch:-（空）}"
+    exit 1
+}
+[[ "$_build_sha" =~ ^[0-9a-f]{40}$ ]] || {
+    echo >&2 "!! build_git_sha 解析失败：${_build_sha:-（空）}"
+    exit 1
+}
+
+# 应用版本从 deb 资产名解析（NeriPlayer_<ver>_amd64.deb），与 control 由 prepare() 对账
+_app_ver="$(bsdtar -tf "$_zip_download" 2>/dev/null \
+    | grep -oE 'NeriPlayer_[^_]+_amd64\.deb$' | head -n1 \
+    | sed -E 's/^NeriPlayer_([^_]+)_amd64\.deb$/\1/')"
+[[ "$_app_ver" =~ ^[0-9]+(\.[0-9A-Za-z]+)*$ ]] || {
+    echo >&2 "!! 解析 deb 文件名版本失败：${_app_ver:-（空）}"
+    exit 1
+}
+
+pkgver="${_app_ver}.r${_build_epoch}"
+[[ "$pkgver" =~ ^[0-9]+(\.[0-9A-Za-z]+)*\.r[0-9]+$ ]] || {
+    echo >&2 "!! pkgver 异常：$pkgver"
+    exit 1
+}
+
+# 源文件名带版本号（缓存隔离 + 日志可读）；已下载则直接改名
+_zip="NeriPlayer-Linux-x64-${pkgver}.zip"
+if [[ ! -f "$_zip" ]]; then
+    mv "$_zip_download" "$_zip"
+fi
+
+# 主许可证：从该次构建的 commit 取 raw LICENSE，流式计算 SHA256（同 axolotl 策略）
+_license_sha="$(set -o pipefail; curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+    "https://raw.githubusercontent.com/cwuom/NeriPlayer-Desktop/${_build_sha}/LICENSE" \
+    | sha256sum | cut -d' ' -f1)" || {
+    echo >&2 "!! LICENSE 获取失败"
+    exit 1
+}
+[[ "$_license_sha" =~ ^[0-9a-f]{64}$ ]] || {
+    echo >&2 "!! LICENSE 哈希异常"
+    exit 1
+}
+
+source=(
+    "$_zip"     # 本地文件：top-level 已下载并校验，SKIP 校验由 prepare() 结构检查兜底
+    "LICENSE-${pkgver}::https://raw.githubusercontent.com/cwuom/NeriPlayer-Desktop/${_build_sha}/LICENSE"
+)
+sha256sums=(
+    'SKIP'
+    "$_license_sha"
+)
+
+prepare() {
+    cd "$srcdir"
+
+    # zip 已被 makepkg 自动解包（bsdtar），断言 amd64 deb 在位
+    local deb
+    deb="$(find . -maxdepth 1 -name 'NeriPlayer_*_amd64.deb' -print -quit)"
+    [[ -n "$deb" && -f "$deb" ]] || {
+        echo >&2 "!! zip 解包后未找到 deb，上游 artifact 结构可能已变化"
+        return 1
+    }
+    local size
+    size="$(stat -L -c%s "$deb")"
+    if (( size < 31457280 )); then
+        echo >&2 "!! deb 体积异常（${size} 字节），疑似错误响应"
+        return 1
+    fi
+    # deb 是 ar 归档：魔数 '!<arch>'（第 8 字节为换行，命令替换会去尾，故取 7 字节）
+    if [[ "$(dd if="$deb" bs=1 count=7 2>/dev/null)" != '!<arch>' ]]; then
+        echo >&2 "!! ar 魔数校验失败，疑似非官方 deb"
+        return 1
+    fi
+
+    # zip 内的嵌套 deb 不会被 makepkg 自动解包，这里手动解出 ar 成员
+    bsdtar -xf "$deb" || { echo >&2 "!! deb 解包失败"; return 1; }
+    [[ -f data.tar.gz ]] || { echo >&2 "!! deb 未解出 data.tar.gz"; return 1; }
+    [[ -f control.tar.gz ]] || { echo >&2 "!! deb 未解出 control.tar.gz"; return 1; }
+
+    # 版本对账：deb control 的 Version（剥掉可能的 Debian revision）必须与 pkgver
+    # 的应用版本部分一致，防止打包错版本
+    local ctl_ver
+    ctl_ver="$(bsdtar -xOf control.tar.gz control 2>/dev/null \
+        | awk '/^Version:/{print $2; exit}' | tr -d '\r')"
+    ctl_ver="${ctl_ver%%-*}"
+    if [[ "$ctl_ver" != "${pkgver%%.r*}" ]]; then
+        echo >&2 "!! 版本对账失败：deb control Version=${ctl_ver:-（空）} ≠ 文件名版本 ${pkgver%%.r*}"
+        return 1
+    fi
+
+    # 构建元数据对账：zip 内 build-metadata.txt 必须与解析 pkgver 时一致
+    local m_epoch m_sha
+    m_epoch="$(awk -F= '$1=="build_epoch" {print $2}' build-metadata.txt | tr -d '\r')"
+    m_sha="$(awk -F= '$1=="build_git_sha" {print $2}' build-metadata.txt | tr -d '\r')"
+    if [[ "$m_epoch" != "$_build_epoch" || "$m_sha" != "$_build_sha" ]]; then
+        echo >&2 "!! 构建元数据对账失败（zip 内容与版本解析不一致）"
+        return 1
+    fi
+    [[ -f "LICENSE-${pkgver}" ]] || { echo >&2 "!! LICENSE 源缺失，下载未落盘"; return 1; }
+}
+
+package() {
+    cd "$srcdir"
+    # 第二层解包：deb 的 data.tar.gz，整树落位
+    bsdtar -xf data.tar.gz -C "$pkgdir/"
+
+    # 主程序（动态链接，直接 NEEDED webkit2gtk-4.1/gtk3/libsoup3 等，见 depends）
+    [[ -x "$pkgdir/usr/bin/neri-player-desktop" ]] || {
+        echo >&2 "!! 主程序缺失或不可执行，上游 deb 布局可能已变化"
+        return 1
+    }
+
+    # 内置 FFmpeg 解码库（dlopen 加载、无 NEEDED 关联，随包原样保留布局）
+    [[ -f "$pkgdir/usr/lib/NeriPlayer/ffmpeg/libavcodec.so.63" ]] || {
+        echo >&2 "!! 内置 ffmpeg 解码库缺失，上游 deb 布局可能已变化"
+        return 1
+    }
+
+    # 桌面项与图标（上游命名无空格无歧义，原样保留）
+    [[ -f "$pkgdir/usr/share/applications/NeriPlayer.desktop" ]] || {
+        echo >&2 "!! desktop 缺失，上游 deb 布局可能已变化"
+        return 1
+    }
+    desktop-file-validate "$pkgdir/usr/share/applications/NeriPlayer.desktop" || return 1
+    [[ -f "$pkgdir/usr/share/icons/hicolor/512x512/apps/neri-player-desktop.png" ]] || {
+        echo >&2 "!! 512 图标缺失，上游 deb 布局可能已变化"
+        return 1
+    }
+
+    # 兜底：断言装包即能启动，不把缺库的坏包打出来
+    if ldd "$pkgdir/usr/bin/neri-player-desktop" 2>/dev/null | grep -q 'not found'; then
+        echo >&2 "!! 主程序仍有缺失的动态库："
+        ldd "$pkgdir/usr/bin/neri-player-desktop" 2>/dev/null | grep 'not found' >&2 || true
+        return 1
+    fi
+
+    # 主许可证：GPL-3.0 全文落位 /usr/share/licenses
+    install -Dm644 "LICENSE-${pkgver}" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+    ls -lh "$pkgdir/usr/bin/" "$pkgdir/usr/lib/NeriPlayer/ffmpeg/" 2>/dev/null || true
+}

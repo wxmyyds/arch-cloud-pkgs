@@ -15,7 +15,7 @@
 | google-chrome | [Google](https://www.google.com/chrome) | Google 官方 Chrome .deb 重打包；版本与 SHA256 从官方 apt 索引动态解析并由 makepkg 落地校验，打包逻辑对齐 AUR 同名包。`paru -Syu` 提示同版本"升级"时跳过 |
 | rtk | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | LLM token 节省代理，Rust musl 静态单文件零依赖。行为仿照官方 install.sh（302 解析 tag + checksums.txt 动态校验 + CWE-22 防御），装到 `/usr/bin/rtk`；装完删除手动装的 `~/.local/bin/rtk` |
 | axolotl-launcher | [Mystic-Stars/Axolotl](https://github.com/Mystic-Stars/Axolotl) | 开源跨平台 Minecraft 启动器（Rust + Tauri，Modrinth 生态），重打包上游官方预编译 deb（amd64/arm64 双架构），版本构建时跟随最新 release。conflicts AUR `axolotl-launcher-bin`；对本机已装 AUR `axolotl-launcher`（源码版）为同名升级 |
-| openai-codex | [openai/codex](https://github.com/openai/codex) | OpenAI Codex CLI，Rust musl 静态单文件（`codex-x86_64-unknown-linux-musl.tar.gz`），版本构建时跟随最新 release（tag 格式 `rust-vX.Y.Z`），SHA256 从 release API `assets[].digest` 解析。装到 `/usr/bin/codex`，装完删除手动装的 `~/.local/bin/codex` |
+| neriplayer | [cwuom/NeriPlayer-Desktop](https://github.com/cwuom/NeriPlayer-Desktop) | 多源在线播放音乐客户端（Tauri 2 + Vue 3 + Rust 音频引擎，内置 FFmpeg 解码库）。上游 WIP 无 release，安装包只能从 GitHub Actions 的 Artifacts 工作流获取：经 nightly.link 取 main 分支最近一次成功构建的 zip artifact，解出官方 deb 重打包，版本 = 应用版本 + 构建 epoch，每次构建自动跟随当时最新构建。上游超 3 天无新构建时（artifact 过期）构建会报错终止，属预期 |
 
 ## 使用方法
 
@@ -44,7 +44,7 @@ sudo pacman -U *.pacman
 - `rtk-termux` 的 `arch=('aarch64')`，产物是 Android Bionic 二进制，**在 x86_64 主机上会被 pacman 的架构检查拦下**——这是刻意的保护，装进去会顶掉正常的 `/usr/bin/rtk`。
   给 Termux 用的话取 artifact 里的裸二进制 `rtk-aarch64-android` 即可，不需要走 pacman。
 ### 升级某个包
-所有包的 `pkgver` 均在构建时自动解析上游最新版（release tag / apt 索引 / 官网页面），
+所有包的 `pkgver` 均在构建时自动解析上游最新版（release tag / apt 索引 / 官网页面 / 工作流构建产物），
 **无需改任何文件**：上游发版后定时重建（每月 1 号）或手动 workflow_dispatch 指定包名
 即取当时最新版。解析失败或版本号格式异常会直接报错终止构建，不会打出错误版本。
 
@@ -71,11 +71,14 @@ sudo pacman -U *.pacman
   动态解析（上游无 SHA256SUMS 聚合文件、deb 无附带 `.sha256`，API digest 是唯一
   独立校验源，实测与下载文件逐字节一致）；`COPYING.md` 经 raw 流式计算；
   仓库内静态文件（desktop、mime xml）哈希固定。
-- `openai-codex`：musl 静态二进制压缩包（`codex-x86_64-unknown-linux-musl.tar.gz`）
-  的 SHA256 从该 tag 的 release API `assets[].digest` 动态解析（digest 带 `sha256:`
-  前缀，awk 剥掉后校验）；`codex-package_SHA256SUMS` 仅覆盖 package 类资产，不覆盖
-  单二进制 tarball，故 API digest 是唯一的独立校验源；`LICENSE` 经 raw 流式计算；
-  `prepare()` 再按体积下限 + CWE-22 路径穿越检查兜底。
+- `neriplayer`：上游 WIP 无 release、GitHub 不给匿名 artifact 摘要，安装包只能从
+  GitHub Actions 的 Artifacts 工作流获取，经 nightly.link（第三方公共服务，匿名可
+  下载公开仓库 artifact，URL 固定指向 main 分支最近一次成功构建的
+  `NeriPlayer-Linux-x64.zip`）取回。zip 内容随构建浮动，`sha256sums` 为 `SKIP`；
+  完整性由 `prepare()` 的体积下限 + zip/ar/deb 魔数 + deb 结构 + 版本对账
+  （control Version 与文件名版本、zip 内 build-metadata 与解析时一致）+ 装包后
+  `ldd` 兜底；`LICENSE`（GPL-3.0）从该次构建的 `build_git_sha` 对应 raw 流式计算
+  SHA256 落地校验。上游 artifact 仅保留 3 天，超期未重建时构建 404 报错（预期）。
 
 自动解析版本的包若长期不重建，产物会停留在上次解析的版本；每月 1 号的全量定时
 重建已覆盖这一点。若上游改动导致解析失败（仓库换名、资产命名变化等），构建会
