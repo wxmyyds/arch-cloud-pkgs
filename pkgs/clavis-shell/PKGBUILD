@@ -1,0 +1,9 @@
+# Replaced by a PKGBUILD rendered from the current upstream main source in CI.
+# This stub supplies build metadata only; CI replaces it before makepkg.
+pkgname=clavis-shell
+pkgver=0
+pkgrel=1
+pkgdesc='Cloud-built upstream source package'
+arch=('x86_64')
+namcap_check=true
+package() { return 1; }

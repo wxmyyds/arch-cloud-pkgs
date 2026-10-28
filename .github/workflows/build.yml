@@ -11,6 +11,7 @@ on:
     paths:
       - 'pkgs/**'
       - '.github/workflows/build.yml'
+      - '.github/scripts/**'
   # Arch 是滚动发行版，glibc / gcc-libs 等 soname bump 会让已构建的包静默失效。
   # 每月全量重建一次，避免等到装包时才发现链接断开。
   # 定时触发时 github.event.before 为空，select job 会走"构建全部"分支。
@@ -67,15 +68,28 @@ jobs:
               fi
               return
             fi
-            # push / 定时触发：diff 出变更的包，但只保留目录仍存在的
-            # （删除的包没有可构建的东西，跳过而不是报错）
+            # push / 定时触发：diff 出变更的包或包构建器
             BEFORE="${BEFORE_SHA:-}"
             if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
               # 新分支首个 push / 定时触发：没有可 diff 的基线，构建全部
               all_pkgs
               return
             fi
-            git diff --name-only "$BEFORE" HEAD -- pkgs/ | cut -d/ -f2 | sort -u | while IFS= read -r n; do
+            CHANGED="$(git diff --name-only "$BEFORE" HEAD)"
+            # 工作流或通用工具链变化可能影响所有 PKGBUILD，保守地全量重建。
+            if printf '%s\n' "$CHANGED" | grep -Eq '^\.github/workflows/build\.yml$|^\.github/scripts/prepare-toolchain\.sh$'; then
+              all_pkgs
+              return
+            fi
+            {
+              printf '%s\n' "$CHANGED" | awk -F/ '$1 == "pkgs" && NF >= 2 { print $2 }'
+              if printf '%s\n' "$CHANGED" | grep -Fxq '.github/scripts/prepare-upstream-source.sh'; then
+                printf '%s\n' clavis-shell key-cli
+              fi
+              if printf '%s\n' "$CHANGED" | grep -Fxq '.github/scripts/build-clavis-aur-deps.sh'; then
+                printf '%s\n' clavis-shell
+              fi
+            } | sort -u | while IFS= read -r n; do
               if [ -d "pkgs/$n" ]; then
                 echo "$n"
               fi
@@ -311,12 +325,22 @@ jobs:
         run: |
           set -euo pipefail
           d="pkgs/$PKG"
+          echo "::group::构建 $PKG"
+          if [ "$PKG" = "clavis-shell" ]; then
+            bash .github/scripts/prepare-upstream-source.sh StatIndet/quickshell clavis-shell "$d"
+            bash .github/scripts/build-clavis-aur-deps.sh "$d"
+          elif [ "$PKG" = "key-cli" ]; then
+            bash .github/scripts/prepare-upstream-source.sh StatIndet/key-cli key-cli "$d"
+          fi
           # 缓存以 root 恢复，先归还给 builder（读写都需要）
           chown -R builder:builder "$d" /home/builder/.cargo /opt/cache/sources
-          echo "::group::构建 $PKG"
           # makepkg 额外参数（如 rtk-termux 交叉编译需要 --ignorearch）
           read -r -a FLAGS <<< "$MAKEPKG_FLAGS"
           (cd "$d" && sudo -u builder env NDK_PLATFORM="$NDK_PLATFORM" makepkg -sf --noconfirm ${FLAGS[@]+"${FLAGS[@]}"})
+          # key-cli 上游还产出需单独授权的权限 split 包；默认 artifact 只带 CLI 本体。
+          if [ "$PKG" = "key-cli" ]; then
+            rm -f "$d"/key-cli-keyboard-access-*.pkg.tar.zst "$d"/key-cli-cpu-power-access-*.pkg.tar.zst
+          fi
           # 产物改用 .pacman 扩展名（与 fpm/tauri/electron-builder 约定一致），
           # 本质仍为标准 pacman 包，pacman -U 可直接安装
           shopt -s nullglob

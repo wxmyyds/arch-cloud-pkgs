@@ -109,7 +109,7 @@ if [[ ! -f "$_zip" ]]; then
     mv "$_zip_download" "$_zip"
 fi
 
-# 主许可证：从该次构建的 commit 取 raw LICENSE，流式计算 SHA256（同 axolotl 策略）
+# 主许可证：从该次构建的 commit 取 raw LICENSE，流式计算 SHA256
 _license_sha="$(set -o pipefail; curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
     "https://raw.githubusercontent.com/cwuom/NeriPlayer-Desktop/${_build_sha}/LICENSE" \
     | sha256sum | cut -d' ' -f1)" || {
