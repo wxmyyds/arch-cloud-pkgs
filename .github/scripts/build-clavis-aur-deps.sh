@@ -5,6 +5,7 @@ set -euo pipefail
 dest="${1:?usage: build-clavis-aur-deps.sh PACKAGE_DIRECTORY}"
 mkdir -p "$dest"
 work_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/clavis-aur.XXXXXX")"
+chown builder:builder "$work_root"
 trap 'rm -rf -- "$work_root"' EXIT
 
 for package in libcava qt6-m3shapes-git; do

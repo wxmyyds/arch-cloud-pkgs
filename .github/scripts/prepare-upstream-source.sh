@@ -23,6 +23,7 @@ mkdir -p "$output_dir"
 
 git clone --depth=1 --branch main "https://github.com/${repo}.git" "$source_dir"
 git -C "$source_dir" fetch --tags --force
+source_commit="$(git -C "$source_dir" rev-parse --short HEAD)"
 chown -R builder:builder "$work_root"
 
 release_tool="$source_dir/scripts/release.py"
@@ -42,4 +43,4 @@ for helper in "$output_dir"/*.install "$output_dir"/*.hook; do
 done
 chown -R builder:builder "$dest" /opt/cache/sources
 printf 'Prepared %s from main commit %s as %s-%s (pkgrel %s)\n' \
-    "$pkgbase" "$(git -C "$source_dir" rev-parse --short HEAD)" "$pkgbase" "$version" "$run_number"
+    "$pkgbase" "$source_commit" "$pkgbase" "$version" "$run_number"
