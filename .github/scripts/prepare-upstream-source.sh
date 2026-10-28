@@ -24,6 +24,30 @@ mkdir -p "$output_dir"
 git clone --depth=1 --branch main "https://github.com/${repo}.git" "$source_dir"
 git -C "$source_dir" fetch --tags --force
 source_commit="$(git -C "$source_dir" rev-parse --short HEAD)"
+
+# 应用包目录下的本地补丁（patches/*.patch）。必须在 git clone 之后、
+# release.py source --working-tree 之前执行：源码包按工作树内容打包，
+# 因此补丁会被烘焙进 tarball，最终编译进安装包，运行期无需任何手工改动。
+patch_dir="$(realpath -m -- "$dest/patches")"
+if [[ -d "$patch_dir" ]]; then
+    shopt -s nullglob
+    patch_files=("$patch_dir"/*.patch)
+    shopt -u nullglob
+    for patch_file in ${patch_files[@]+"${patch_files[@]}"}; do
+        name="$(basename "$patch_file")"
+        if git -C "$source_dir" apply --check "$patch_file" 2>/dev/null; then
+            printf 'Applying patch %s\n' "$name"
+            git -C "$source_dir" apply "$patch_file"
+        elif git -C "$source_dir" apply --reverse --check "$patch_file" 2>/dev/null; then
+            printf 'Patch %s already applied upstream (commit %s), skipping\n' "$name" "$source_commit"
+        else
+            printf 'Patch %s does not apply to upstream %s; refresh %s\n' \
+                "$name" "$source_commit" "$patch_file" >&2
+            exit 1
+        fi
+    done
+fi
+
 chown -R builder:builder "$work_root"
 
 release_tool="$source_dir/scripts/release.py"

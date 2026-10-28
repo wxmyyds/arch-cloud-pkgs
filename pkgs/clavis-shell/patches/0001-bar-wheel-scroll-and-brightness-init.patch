@@ -1,0 +1,97 @@
+diff --git a/Modules/Bar/QuickSettings/Brightness.qml b/Modules/Bar/QuickSettings/Brightness.qml
+index 40f5ded..5441b57 100644
+--- a/Modules/Bar/QuickSettings/Brightness.qml
++++ b/Modules/Bar/QuickSettings/Brightness.qml
+@@ -58,7 +58,12 @@ Item {
+         }
+         Accessible.name: tooltip.text
+ 
+-        WheelHandler {
++        // RippleButton's MouseArea consumes wheel events before this item's
++        // WheelHandler sees them on Qt 6.12, so the scroll did nothing. Handle the
++        // wheel on a MouseArea instead; Qt.NoButton keeps click handling intact.
++        MouseArea {
++            anchors.fill: parent
++            acceptedButtons: Qt.NoButton
+             onWheel: wheel => {
+                 const step = 0.05;
+                 let newBri = root.brightnessValue;
+diff --git a/Modules/Bar/QuickSettings/Microphone.qml b/Modules/Bar/QuickSettings/Microphone.qml
+index 43e07fc..9a07ed9 100644
+--- a/Modules/Bar/QuickSettings/Microphone.qml
++++ b/Modules/Bar/QuickSettings/Microphone.qml
+@@ -58,7 +58,12 @@ Item {
+         }
+         Accessible.name: tooltip.text
+ 
+-        WheelHandler {
++        // RippleButton's MouseArea consumes wheel events before this item's
++        // WheelHandler sees them on Qt 6.12, so the scroll did nothing. Handle the
++        // wheel on a MouseArea instead; Qt.NoButton keeps click handling intact.
++        MouseArea {
++            anchors.fill: parent
++            acceptedButtons: Qt.NoButton
+             onWheel: wheel => {
+                 const step = 0.05;
+                 let newVol = Volume.sourceVolume;
+diff --git a/Modules/Bar/QuickSettings/Volume.qml b/Modules/Bar/QuickSettings/Volume.qml
+index 9247ae9..b0605fb 100644
+--- a/Modules/Bar/QuickSettings/Volume.qml
++++ b/Modules/Bar/QuickSettings/Volume.qml
+@@ -67,7 +67,12 @@ Item {
+         }
+         Accessible.name: tooltip.text
+ 
+-        WheelHandler {
++        // RippleButton's MouseArea consumes wheel events before this item's
++        // WheelHandler sees them on Qt 6.12, so the scroll did nothing. Handle the
++        // wheel on a MouseArea instead; Qt.NoButton keeps click handling intact.
++        MouseArea {
++            anchors.fill: parent
++            acceptedButtons: Qt.NoButton
+             onWheel: wheel => {
+                 const step = 0.05;
+                 let newVol = Volume.sinkVolume;
+@@ -76,6 +81,7 @@ Item {
+                 else
+                     newVol -= step;
+                 Volume.setSinkVolume(newVol);
++                wheel.accepted = true;
+             }
+         }
+         onClicked: {
+diff --git a/Services/Brightness.qml b/Services/Brightness.qml
+index 99f31e9..724fdc6 100644
+--- a/Services/Brightness.qml
++++ b/Services/Brightness.qml
+@@ -47,6 +47,11 @@ Singleton {
+ 
+         root.monitors = next;
+         root.rescanDdcMonitors();
++        // ddcDetectProcess.onExited is the only place that calls initializeMonitor(0),
++        // but a missing ddcutil binary fails to start the process and onExited never
++        // fires. Without this fallback monitor.ready stays false and every brightness
++        // change is silently dropped. Initialise directly if the DDC probe never ran.
++        initFallbackTimer.restart();
+     }
+ 
+     Connections {
+@@ -59,6 +64,18 @@ Singleton {
+         }
+     }
+ 
++    Timer {
++        id: initFallbackTimer
++
++        interval: 1200
++        repeat: false
++        running: false
++        onTriggered: {
++            if (root.monitors.length > 0 && !root.monitors[0].ready)
++                root.initializeMonitor(0);
++        }
++    }
++
+     function backlightCommand(percent) {
+         const command = ["brightnessctl", "--class", "backlight"];
+         if (BacklightState.deviceName.length > 0)

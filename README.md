@@ -14,7 +14,7 @@
 | mark-shot | [jswysnemc/mark-shot](https://github.com/jswysnemc/mark-shot) | Qt6 Wayland 截图标注工具，重打包上游官方预编译 Arch 包（依赖、layer-shell 库与翻译插件齐全，二进制字节保真），版本构建时跟随最新 release。conflicts AUR `mark-shot-bin`；对本机已装 AUR `mark-shot` 为同名升级 |
 | google-chrome | [Google](https://www.google.com/chrome) | Google 官方 Chrome .deb 重打包；版本与 SHA256 从官方 apt 索引动态解析并由 makepkg 落地校验，打包逻辑对齐 AUR 同名包。`paru -Syu` 提示同版本"升级"时跳过 |
 | rtk | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | LLM token 节省代理，Rust musl 静态单文件零依赖。行为仿照官方 install.sh（302 解析 tag + checksums.txt 动态校验 + CWE-22 防御），装到 `/usr/bin/rtk`；装完删除手动装的 `~/.local/bin/rtk` |
-| clavis-shell | [StatIndet/quickshell](https://github.com/StatIndet/quickshell) | Clavis QML/Qt6 Shell；Actions 克隆上游 main 当前源码，用上游 release.py 生成带日期版本的源码包和 PKGBUILD 后编译；AUR 运行库 libcava 与 qt6-m3shapes-git 也在同一云端任务源码构建并随 artifact 提供。需同时安装 key-cli artifact |
+| clavis-shell | [StatIndet/quickshell](https://github.com/StatIndet/quickshell) | Clavis QML/Qt6 Shell；Actions 克隆上游 main 当前源码，先应用 `pkgs/clavis-shell/patches/*.patch`，再用上游 release.py 生成带日期版本的源码包和 PKGBUILD 后编译；AUR 运行库 libcava 与 qt6-m3shapes-git 也在同一云端任务源码构建并随 artifact 提供。需同时安装 key-cli artifact |
 | key-cli | [StatIndet/key-cli](https://github.com/StatIndet/key-cli) | Clavis 配套 CLI 与系统指标服务；Actions 克隆上游 main 当前源码并云端编译。artifact 仅包含 key-cli 本体，不包含需单独授权的键盘/CPU 权限包 |
 | neriplayer | [cwuom/NeriPlayer-Desktop](https://github.com/cwuom/NeriPlayer-Desktop) | 多源在线播放音乐客户端（Tauri 2 + Vue 3 + Rust 音频引擎，内置 FFmpeg 解码库）。上游 WIP 无 release，安装包只能从 GitHub Actions 的 Artifacts 工作流获取：经 nightly.link 取 main 分支最近一次成功构建的 zip artifact，解出官方 deb 重打包，版本 = 应用版本 + 构建 epoch，每次构建自动跟随当时最新构建。上游超 3 天无新构建时（artifact 过期）构建会报错终止，属预期 |
 
@@ -38,7 +38,7 @@ sudo pacman -U *.pacman
 
 ### Clavis Shell 安装
 
-Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli 两个 artifact，并将其中的 .pacman 文件放在同一目录后运行 `sudo pacman -U *.pacman`。CI 每次从两个上游仓库的 main 获取源码，并通过上游 release.py 按构建日期生成版本，再在云端编译；Clavis artifact 另包含 CI 源码构建的 libcava、qt6-m3shapes-git。key-cli artifact 只含 CLI 本体，不含键盘/CPU 特权授权包；桌面机不运行 makepkg。
+Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli 两个 artifact，并将其中的 .pacman 文件放在同一目录后运行 `sudo pacman -U *.pacman`。CI 每次从两个上游仓库的 main 获取源码，对 clavis-shell 先应用 `pkgs/clavis-shell/patches/` 下的本地补丁，再通过上游 release.py 按构建日期生成版本并在云端编译（补丁因此被烘焙进源码包与安装包，桌面机无需任何手工改动）；Clavis artifact 另包含 CI 源码构建的 libcava、qt6-m3shapes-git。key-cli artifact 只含 CLI 本体，不含键盘/CPU 特权授权包；桌面机不运行 makepkg。
 
 **前置坑：**
 
