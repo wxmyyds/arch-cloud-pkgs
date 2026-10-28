@@ -336,15 +336,18 @@ jobs:
           chown -R builder:builder "$d" /home/builder/.cargo /opt/cache/sources
           # makepkg 额外参数（如 rtk-termux 交叉编译需要 --ignorearch）
           read -r -a FLAGS <<< "$MAKEPKG_FLAGS"
-          if [ "$PKG" = "key-cli" ]; then
-            runtime_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/key-cli-xdg-runtime.XXXXXX")"
-            chmod 700 "$runtime_dir"
-            chown builder:builder "$runtime_dir"
-            trap 'rm -rf -- "$runtime_dir"' EXIT
-            (cd "$d" && sudo -u builder env XDG_RUNTIME_DIR="$runtime_dir" NDK_PLATFORM="$NDK_PLATFORM" makepkg -sf --noconfirm ${FLAGS[@]+"${FLAGS[@]}"})
-          else
-            (cd "$d" && sudo -u builder env NDK_PLATFORM="$NDK_PLATFORM" makepkg -sf --noconfirm ${FLAGS[@]+"${FLAGS[@]}"})
+          # 无图形会话的构建用户需要一个私有运行时目录与离屏平台：
+          # key-cli 的 Python 测试要求 XDG_RUNTIME_DIR；
+          # clavis-shell 的 Qt 测试以 QGuiApplication 启动，必须有 QPA 平台插件。
+          runtime_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/makepkg-xdg-runtime.XXXXXX")"
+          chmod 700 "$runtime_dir"
+          chown builder:builder "$runtime_dir"
+          trap 'rm -rf -- "$runtime_dir"' EXIT
+          make_env=(XDG_RUNTIME_DIR="$runtime_dir" NDK_PLATFORM="$NDK_PLATFORM")
+          if [ "$PKG" = "clavis-shell" ]; then
+            make_env+=(QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=)
           fi
+          (cd "$d" && sudo -u builder env "${make_env[@]}" makepkg -sf --noconfirm ${FLAGS[@]+"${FLAGS[@]}"})
           # key-cli 上游还产出需单独授权的权限 split 包；默认 artifact 只带 CLI 本体。
           if [ "$PKG" = "key-cli" ]; then
             rm -f "$d"/key-cli-keyboard-access-*.pkg.tar.zst "$d"/key-cli-cpu-power-access-*.pkg.tar.zst
