@@ -1,0 +1,120 @@
+diff --git a/Services/IdleService.qml b/Services/IdleService.qml
+index a9b30ab..dfcb40e 100644
+--- a/Services/IdleService.qml
++++ b/Services/IdleService.qml
+@@ -32,6 +32,12 @@ Singleton {
+     readonly property string policyConfigDir: Paths.configHome
+     readonly property string policyConfigPath: policyConfigDir + "/idle-policy.json"
+     readonly property bool policyReady: policyStoreReady && !policyLoading
++    // One-shot gate: IdleMonitors must not create notifications until the policy
++    // has been loaded once with its final values. Unlike policyReady it never
++    // flips again, so a later policy reload cannot destroy and recreate the
++    // notifications (quickshell bug #938 can drop isIdle, and a bindable merge
++    // may leave a monitor without any notification at all).
++    property bool policyLoaded: false
+     property bool policyStoreReady: false
+     property bool policyLoading: true
+ 
+@@ -233,7 +239,28 @@ Singleton {
+     }
+ 
+     function _monitorEnabled(stageEnabled, timeout, respectInhibitors) {
+-        return root.policyEnabled && stageEnabled && timeout > 0 && !(respectInhibitors && root.inhibited);
++        // quickshell's IdleMonitor loses its isIdle subscription whenever the
++        // underlying ext_idle_notification_v1 is destroyed and recreated at the
++        // same address (upstream bug #938, fix #1097 not yet merged). Clavis'
++        // policy loads asynchronously, so every stage would otherwise be created
++        // with default values and immediately recreated with the user's values,
++        // leaving isIdle permanently false and lock/display-off/suspend dead.
++        // Gate creation behind the one-shot policyLoaded flag, and let
++        // scheduleRecycle() force a clean recreation on later config changes.
++        return root.policyLoaded && root.policyEnabled && stageEnabled && timeout > 0
++                && !(respectInhibitors && root.inhibited);
++    }
++
++    function scheduleRecycle(monitor) {
++        // Toggle the stage's IdleMonitor enabled=false -> true so its
++        // notification is destroyed and recreated with the new timeout/
++        // respectInhibitors. bNotification transitions through null, forcing the
++        // isIdle binding to re-subscribe on the new object even when the
++        // compositor reuses the same heap address.
++        if (!root.policyLoaded)
++            return;
++        monitor.recycle = true;
++        Qt.callLater(() => { monitor.recycle = false; });
+     }
+ 
+     function _setDimmed(value) {
+@@ -319,18 +346,26 @@ Singleton {
+ 
+     IdleMonitor {
+         id: dimMonitor
++        property bool recycle: false
+         timeout: Math.max(1, root.dimTimeout)
+         respectInhibitors: root.dimRespectInhibitors
+-        enabled: root._monitorEnabled(root.dimEnabled, root.dimTimeout, root.dimRespectInhibitors)
++        enabled: root._monitorEnabled(root.dimEnabled, root.dimTimeout, root.dimRespectInhibitors) && !recycle
++
++        onTimeoutChanged: root.scheduleRecycle(dimMonitor)
++        onRespectInhibitorsChanged: root.scheduleRecycle(dimMonitor)
+ 
+         onIsIdleChanged: root._setDimmed(isIdle)
+     }
+ 
+     IdleMonitor {
+         id: lockMonitor
++        property bool recycle: false
+         timeout: Math.max(1, root.lockTimeout)
+         respectInhibitors: root.lockRespectInhibitors
+-        enabled: root._monitorEnabled(root.lockEnabled, root.lockTimeout, root.lockRespectInhibitors)
++        enabled: root._monitorEnabled(root.lockEnabled, root.lockTimeout, root.lockRespectInhibitors) && !recycle
++
++        onTimeoutChanged: root.scheduleRecycle(lockMonitor)
++        onRespectInhibitorsChanged: root.scheduleRecycle(lockMonitor)
+ 
+         onIsIdleChanged: {
+             if (isIdle)
+@@ -340,19 +375,27 @@ Singleton {
+ 
+     IdleMonitor {
+         id: displayOffMonitor
++        property bool recycle: false
+         timeout: Math.max(1, root.displayOffTimeout)
+         respectInhibitors: root.displayOffRespectInhibitors
+         enabled: root._monitorEnabled(root.displayOffEnabled, root.displayOffTimeout,
+-                                      root.displayOffRespectInhibitors)
++                                      root.displayOffRespectInhibitors) && !recycle
++
++        onTimeoutChanged: root.scheduleRecycle(displayOffMonitor)
++        onRespectInhibitorsChanged: root.scheduleRecycle(displayOffMonitor)
+ 
+         onIsIdleChanged: root._setDisplaysOff(isIdle)
+     }
+ 
+     IdleMonitor {
+         id: suspendMonitor
++        property bool recycle: false
+         timeout: Math.max(1, root.suspendTimeout)
+         respectInhibitors: root.suspendRespectInhibitors
+-        enabled: root._monitorEnabled(root.suspendEnabled, root.suspendTimeout, root.suspendRespectInhibitors)
++        enabled: root._monitorEnabled(root.suspendEnabled, root.suspendTimeout, root.suspendRespectInhibitors) && !recycle
++
++        onTimeoutChanged: root.scheduleRecycle(suspendMonitor)
++        onRespectInhibitorsChanged: root.scheduleRecycle(suspendMonitor)
+ 
+         onIsIdleChanged: {
+             if (isIdle)
+@@ -392,11 +435,13 @@ Singleton {
+             }
+             if (repair)
+                 root.savePolicy();
++            root.policyLoaded = true;
+         }
+ 
+         onLoadFailed: {
+             root.loadPolicy({});
+             root.savePolicy();
++            root.policyLoaded = true;
+         }
+     }
+ 

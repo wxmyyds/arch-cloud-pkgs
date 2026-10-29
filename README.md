@@ -40,6 +40,11 @@ sudo pacman -U *.pacman
 
 Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli 两个 artifact，并将其中的 .pacman 文件放在同一目录后运行 `sudo pacman -U *.pacman`。CI 每次从两个上游仓库的 main 获取源码，对 clavis-shell 先应用 `pkgs/clavis-shell/patches/` 下的本地补丁，再通过上游 release.py 按构建日期生成版本并在云端编译（补丁因此被烘焙进源码包与安装包，桌面机无需任何手工改动）；Clavis artifact 另包含 CI 源码构建的 libcava、qt6-m3shapes-git。key-cli artifact 只含 CLI 本体，不含键盘/CPU 特权授权包；桌面机不运行 makepkg。
 
+**当前本地补丁**（每个均为上游未修复时的临时 workaround，含背景、触发条件与移除方法，见 [`pkgs/clavis-shell/patches/README.md`](pkgs/clavis-shell/patches/README.md)）：
+
+- `0001-bar-wheel-scroll-and-brightness-init.patch` —— Qt 6.12 任务栏亮度/麦克风滚轮失效（WheelHandler 被 RippleButton 吞事件）。
+- `0002-idle-monitor-rebuild-workaround.patch` —— quickshell IdleMonitor 同地址销毁重建后 `isIdle` 失联（上游 [#938]/[#1097]），Clavis 自动锁屏/息屏/休眠永不触发，本补丁强制策略加载后再建通知并在配置变化时重建 monitor。
+
 **前置坑：**
 
 - `we-layerd` 改用上游官方预编译 deb 重打包后，CEF 与 DXC 运行时已内置
