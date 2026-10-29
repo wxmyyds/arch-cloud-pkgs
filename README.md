@@ -6,12 +6,9 @@
 
 | 包名 | 上游 | 说明 |
 |------|------|------|
-| we-layerd | [Aromatic05/we-layerd](https://github.com/Aromatic05/we-layerd) | 原生 Wallpaper Engine 运行时（scene/video/web，支持 niri）。重打包上游官方预编译 deb，内置私有 CEF/DXC 运行时，版本构建时跟随最新 release。**不再需要 AUR 依赖** |
 | wayland-pipewire-idle-inhibit-aur | [rafaelrc7/wayland-pipewire-idle-inhibit](https://github.com/rafaelrc7/wayland-pipewire-idle-inhibit) | 播放声音时抑制 Wayland idle（包名带 `-aur` 后缀以避免产物匹配问题，`provides` 原包名），版本构建时跟随最新 tag，源码编译 |
 | rtk-termux | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | 交叉编译的 Termux aarch64 版（上游只发 gnu/musl 预编译，没有 Bionic），版本构建时跟随最新 release。**不要在本机 Arch 上安装**，见下 |
 | wechat | [腾讯微信](https://linux.weixin.qq.com/) | 腾讯官方微信 Linux x86_64 AppImage 重打包为原生包；仅支持 x86_64，版本自动跟随官网，ARM 版暂未接入 |
-| noctalia-greeter | [noctalia-dev/noctalia-greeter](https://github.com/noctalia-dev/noctalia-greeter) | Noctalia 官方 greetd 登录界面（C++20 + wlroots 合成器），源码编译，版本构建时自动跟随上游最新 tag。替代旧包 `dank-greeter`（DMS 登录界面）；装完编辑 `/etc/greetd/config.toml` 指向 `noctalia-greeter-session` |
-| mark-shot | [jswysnemc/mark-shot](https://github.com/jswysnemc/mark-shot) | Qt6 Wayland 截图标注工具，重打包上游官方预编译 Arch 包（依赖、layer-shell 库与翻译插件齐全，二进制字节保真），版本构建时跟随最新 release。conflicts AUR `mark-shot-bin`；对本机已装 AUR `mark-shot` 为同名升级 |
 | google-chrome | [Google](https://www.google.com/chrome) | Google 官方 Chrome .deb 重打包；版本与 SHA256 从官方 apt 索引动态解析并由 makepkg 落地校验，打包逻辑对齐 AUR 同名包。`paru -Syu` 提示同版本"升级"时跳过 |
 | rtk | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | LLM token 节省代理，Rust musl 静态单文件零依赖。行为仿照官方 install.sh（302 解析 tag + checksums.txt 动态校验 + CWE-22 防御），装到 `/usr/bin/rtk`；装完删除手动装的 `~/.local/bin/rtk` |
 | clavis-shell | [StatIndet/quickshell](https://github.com/StatIndet/quickshell) | Clavis QML/Qt6 Shell；Actions 克隆上游 main 当前源码，先应用 `pkgs/clavis-shell/patches/*.patch`，再用上游 release.py 生成带日期版本的源码包和 PKGBUILD 后编译；AUR 运行库 libcava 与 qt6-m3shapes-git 也在同一云端任务源码构建并随 artifact 提供。需同时安装 key-cli artifact |
@@ -45,12 +42,10 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 - `0001-bar-wheel-scroll-and-brightness-init.patch` —— Qt 6.12 任务栏亮度/麦克风滚轮失效（WheelHandler 被 RippleButton 吞事件）。
 - `0002-idle-monitor-rebuild-workaround.patch` —— quickshell IdleMonitor 同地址销毁重建后 `isIdle` 失联（上游 [#938]/[#1097]），Clavis 自动锁屏/息屏/休眠永不触发，本补丁强制策略加载后再建通知并在配置变化时重建 monitor。
 
+> 所有包的 artifact 统一**不含 `-debug` 调试符号包**：Arch 的 `makepkg.conf` 默认 `OPTIONS` 含 `debug`，源码构建类包会额外产出 `<pkg>-debug-*.pkg.tar.zst`（clavis-shell 约 18MB、key-cli 约 3.8MB），构建脚本在上传前统一删除（见 `.github/workflows/build.yml`）。
+
 **前置坑：**
 
-- `we-layerd` 改用上游官方预编译 deb 重打包后，CEF 与 DXC 运行时已内置
-  （`/usr/lib/cef/`、`/usr/lib/we-layerd/dxc/`，经 `$ORIGIN` RUNPATH 加载），
-  全部依赖都在官方仓库，`pacman -U` 直接装。若之前为旧源码构建版装过 AUR 的
-  `cef` / `directx-shader-compiler` 且无其他包依赖它们，可顺手移除。
 - `rtk-termux` 的 `arch=('aarch64')`，产物是 Android Bionic 二进制，**在 x86_64 主机上会被 pacman 的架构检查拦下**——这是刻意的保护，装进去会顶掉正常的 `/usr/bin/rtk`。
   给 Termux 用的话取 artifact 里的裸二进制 `rtk-aarch64-android` 即可，不需要走 pacman。
 ### 升级某个包
@@ -62,12 +57,6 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 
 - `google-chrome`：版本与 SHA256 从官方 apt `Packages` 索引解析。
 - `rtk`：deb/tarball 的 SHA256 从该 tag 的 `checksums.txt` 解析。
-- `we-layerd`：deb 文件名与 SHA256 从该 tag 的 `SHA256SUMS` 解析。
-- `mark-shot`：x86_64 pkg.tar.zst 资产名与 SHA256 从该 tag 的 `*.pkg.tar.zst.sha256`
-  解析；上游若改了 pkgrel 导致常规命名探测落空，回退 release 资产页解析实际文件名。
-- `noctalia-greeter`：上游无 release 只有 tag，走 `git ls-remote`（不耗 API 配额）
-  + tags API 兜底，过滤语义化 tag 后 `sort -V` 取最新；tarball SHA256 同次构建内
-  流式计算，`prepare()` 再用 `meson.build` 的 project version 与 `pkgver` 对账。
 - `wayland-pipewire-idle-inhibit-aur`：上游无 release 只有 tag，走 `git ls-remote`（不耗
   API 配额）+ tags API 兜底，过滤语义化 tag 后 `sort -V` 取最新；tarball SHA256 同次
   构建内流式计算，`prepare()` 再用 `Cargo.toml` 的 version 与 `pkgver` 对账。
@@ -110,7 +99,8 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 ```bash
 mkdir pkgs/<新包名>
 # 参照已有包的 PKGBUILD 编写：源码构建参照 wayland-pipewire-idle-inhibit-aur，
-# 预编译重打包参照 we-layerd（deb）/ mark-shot（现成 pacman 包）；源码编译参照 noctalia-greeter（meson）
+# 预编译重打包参照 wechat（AppImage）/ google-chrome（deb）/ neriplayer（zip 内 deb）；
+# 交叉编译参照 rtk-termux（cargo-ndk + NDK）
 git add && git commit && git push   # 自动触发构建
 ```
 

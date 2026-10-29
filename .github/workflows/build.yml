@@ -348,6 +348,11 @@ jobs:
             make_env+=(QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=)
           fi
           (cd "$d" && sudo -u builder env "${make_env[@]}" makepkg -sf --noconfirm ${FLAGS[@]+"${FLAGS[@]}"})
+          # 统一丢弃调试符号包：Arch 的 makepkg.conf 默认 OPTIONS 含 debug，
+          # 源码构建类包会额外产出 <pkg>-debug-*.pkg.tar.zst（clavis-shell 约 18MB、
+          # key-cli 约 3.8MB）。桌面机不需要符号，删掉可显著减小 artifact，
+          # 避免用户误装。重打包类包已自带 !debug，此处删除是幂等的。
+          rm -f "$d"/*-debug-*.pkg.tar.zst
           # key-cli 上游还产出需单独授权的权限 split 包；默认 artifact 只带 CLI 本体。
           if [ "$PKG" = "key-cli" ]; then
             rm -f "$d"/key-cli-keyboard-access-*.pkg.tar.zst "$d"/key-cli-cpu-power-access-*.pkg.tar.zst
