@@ -6,7 +6,6 @@
 
 | 包名 | 上游 | 说明 |
 |------|------|------|
-| wayland-pipewire-idle-inhibit-aur | [rafaelrc7/wayland-pipewire-idle-inhibit](https://github.com/rafaelrc7/wayland-pipewire-idle-inhibit) | 播放声音时抑制 Wayland idle（包名带 `-aur` 后缀以避免产物匹配问题，`provides` 原包名），版本构建时跟随最新 tag，源码编译 |
 | rtk-termux | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | 交叉编译的 Termux aarch64 版（上游只发 gnu/musl 预编译，没有 Bionic），版本构建时跟随最新 release。**不要在本机 Arch 上安装**，见下 |
 | wechat | [腾讯微信](https://linux.weixin.qq.com/) | 腾讯官方微信 Linux x86_64 AppImage 重打包为原生包；仅支持 x86_64，版本自动跟随官网，ARM 版暂未接入 |
 | google-chrome | [Google](https://www.google.com/chrome) | Google 官方 Chrome .deb 重打包；版本与 SHA256 从官方 apt 索引动态解析并由 makepkg 落地校验，打包逻辑对齐 AUR 同名包。`paru -Syu` 提示同版本"升级"时跳过 |
@@ -57,9 +56,6 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 
 - `google-chrome`：版本与 SHA256 从官方 apt `Packages` 索引解析。
 - `rtk`：deb/tarball 的 SHA256 从该 tag 的 `checksums.txt` 解析。
-- `wayland-pipewire-idle-inhibit-aur`：上游无 release 只有 tag，走 `git ls-remote`（不耗
-  API 配额）+ tags API 兜底，过滤语义化 tag 后 `sort -V` 取最新；tarball SHA256 同次
-  构建内流式计算，`prepare()` 再用 `Cargo.toml` 的 version 与 `pkgver` 对账。
 - `rtk-termux`：GitHub archive 源码 tarball 动态生成、官方不承诺内容寻址，
   `sha256sums` 为 `SKIP`；完整性由 `prepare()` 的体积下限 + `Cargo.toml`/`src/`
   结构检查（version 与 `pkgver` 对账）兜底。
@@ -98,9 +94,8 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 
 ```bash
 mkdir pkgs/<新包名>
-# 参照已有包的 PKGBUILD 编写：源码构建参照 wayland-pipewire-idle-inhibit-aur，
-# 预编译重打包参照 wechat（AppImage）/ google-chrome（deb）/ neriplayer（zip 内 deb）；
-# 交叉编译参照 rtk-termux（cargo-ndk + NDK）
+# 参照已有包的 PKGBUILD 编写：源码构建参照 rtk（Rust）；预编译重打包参照 wechat（AppImage）/
+# google-chrome（deb）/ neriplayer（zip 内 deb）；交叉编译参照 rtk-termux（cargo-ndk + NDK）
 git add && git commit && git push   # 自动触发构建
 ```
 
