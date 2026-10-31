@@ -12,7 +12,7 @@
 | rtk | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | LLM token 节省代理，Rust musl 静态单文件零依赖。行为仿照官方 install.sh（302 解析 tag + checksums.txt 动态校验 + CWE-22 防御），装到 `/usr/bin/rtk`；装完删除手动装的 `~/.local/bin/rtk` |
 | clavis-shell | [StatIndet/quickshell](https://github.com/StatIndet/quickshell) | Clavis QML/Qt6 Shell；Actions 克隆上游 main 当前源码，先应用 `pkgs/clavis-shell/patches/*.patch`，再用上游 release.py 生成带日期版本的源码包和 PKGBUILD 后编译；AUR 运行库 libcava 与 qt6-m3shapes-git 也在同一云端任务源码构建并随 artifact 提供。需同时安装 key-cli artifact |
 | key-cli | [StatIndet/key-cli](https://github.com/StatIndet/key-cli) | Clavis 配套 CLI 与系统指标服务；Actions 克隆上游 main 当前源码并云端编译。artifact 仅包含 key-cli 本体，不包含需单独授权的键盘/CPU 权限包 |
-| neriplayer | [cwuom/NeriPlayer-Desktop](https://github.com/cwuom/NeriPlayer-Desktop) | 多源在线播放音乐客户端（Tauri 2 + Vue 3 + Rust 音频引擎，内置 FFmpeg 解码库）。上游 WIP 无 release，安装包只能从 GitHub Actions 的 Artifacts 工作流获取：经 nightly.link 取 main 分支最近一次成功构建的 zip artifact，解出官方 deb 重打包，版本 = 应用版本 + 构建 epoch，每次构建自动跟随当时最新构建。上游超 3 天无新构建时（artifact 过期）构建会报错终止，属预期 |
+| neriplayer | [cwuom/NeriPlayer-Desktop](https://github.com/cwuom/NeriPlayer-Desktop) | 多源在线播放音乐客户端（Tauri 2 + Vue 3 + Rust 音频引擎，内置 FFmpeg 解码库）。上游已正式发 Release（tag 形如 `NeriPlayer-<sha7>.<MMDDHHMM>`，每个 Release 附 deb/rpm/AppImage 与 `SHA256SUMS.txt`）：本包取 `releases/latest` 的 tag，直接下载官方 amd64 deb 重打包，版本 = 应用版本 + 构建 epoch（`1.0.0.r<epoch>`）保持单调升级，每次上游发版自动跟随。deb 的 SHA256 直接取自该 Release 的 `SHA256SUMS.txt` 硬校验 |
 | dux-files | [duxlabs-dev/dux-files](https://github.com/duxlabs-dev/dux-files) | Dux Labs 的 Wayland 文件管理器（Quickshell UI + Go daemon，UI 经 go:embed 内嵌进单文件二进制）。上游 release 直接发静态 linux-amd64/arm64 二进制与补全包，本包取 amd64 预编译产物重打包（不编译），桌面项/图标/polkit/D-Bus/portal/systemd 资产从同 tag raw 取源；版本自动跟随 `releases/latest`。运行时依赖 `quickshell`（官方仓库包）|
 
 ## 使用方法
@@ -74,14 +74,13 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 - `wechat`：官网未提供固定 SHA-256，`sha256sums` 为 `SKIP`；完整性由
   `prepare()` 的体积下限、AppImage type-2 魔数和解包后的关键文件检查兜底。
   源文件名包含版本号，避免固定下载 URL 在 CI 的 `SRCDEST` 缓存中复用旧版本。
-- `neriplayer`：上游 WIP 无 release、GitHub 不给匿名 artifact 摘要，安装包只能从
-  GitHub Actions 的 Artifacts 工作流获取，经 nightly.link（第三方公共服务，匿名可
-  下载公开仓库 artifact，URL 固定指向 main 分支最近一次成功构建的
-  `NeriPlayer-Linux-x64.zip`）取回。zip 内容随构建浮动，`sha256sums` 为 `SKIP`；
-  完整性由 `prepare()` 的体积下限 + zip/ar/deb 魔数 + deb 结构 + 版本对账
-  （control Version 与文件名版本、zip 内 build-metadata 与解析时一致）+ 装包后
-  `ldd` 兜底；`LICENSE`（GPL-3.0）从该次构建的 `build_git_sha` 对应 raw 流式计算
-  SHA256 落地校验。上游 artifact 仅保留 3 天，超期未重建时构建 404 报错（预期）。
+- `neriplayer`：上游已正式发 Release，每个 Release 附 `NeriPlayer_<ver>_amd64.deb`
+  与 `SHA256SUMS.txt`（含该 deb 的 SHA256）、`build-metadata.txt`（含 `build_epoch`、
+  `build_git_sha`、`release_tag`）。deb 的 SHA256 直接从 `SHA256SUMS.txt` 解析并硬
+  校验，不再需要 `SKIP`；`LICENSE`（GPL-3.0）从该 Release 的 `build_git_sha` 对应
+  raw 流式计算 SHA256。其余完整性由 `prepare()` 的体积下限 + ar 魔数 + deb 结构 +
+  版本对账（control Version / deb 文件名 / `release_tag` 三方一致）+ 装包后 `ldd`
+  兜底。早期版本经 nightly.link 取 artifact zip，zip 仅保留 3 天且无摘要，现已弃用。
 - `dux-files`：release 资产自带 `dfiles-linux-amd64.gz.sha256` 与
   `dfiles-completions-<ver>.tar.gz.sha256`，直接解析为二进制/补全包的 SHA256；
   桌面项、图标、polkit、D-Bus、portal、systemd 单元、LICENSE、README 按同一 tag
@@ -112,7 +111,7 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 ```bash
 mkdir pkgs/<新包名>
 # 参照已有包的 PKGBUILD 编写：源码构建参照 rtk（Rust）；预编译重打包参照 wechat（AppImage）/
-# google-chrome（deb）/ neriplayer（zip 内 deb）/ dux-files（release 里的预编译二进制）；
+# google-chrome（deb）/ neriplayer（release 里的官方 deb）/ dux-files（release 里的预编译二进制）；
 # 交叉编译参照 rtk-termux（cargo-ndk + NDK）
 git add && git commit && git push   # 自动触发构建
 ```
@@ -152,4 +151,8 @@ git add && git commit && git push   # 自动触发构建
 
 - [x] 一期：增量构建（只构建变更的包）+ 并行 matrix + cargo 缓存
 - [ ] 二期：nvchecker 自动检测上游发版并触发构建
-- [ ] 三期：Releases 当私人 pacman 仓库（repo-add），实现 pacman -Syu 直接更新
+- [ ] 三期：Git Tag + Release 作为分发通道（每个版本一个 tag `pkg@ver-rel`，Release
+  描述存该版本全部元数据，Assets 只放安装包），由轻量包管理器读取并安装
+
+> 三期不使用 pacman 数据库（`repo-add` / `cloud.db`）。版本即 Git Tag，元数据即
+> Release 描述，因此不存在跨包的共享索引，发布过程无需串行化。

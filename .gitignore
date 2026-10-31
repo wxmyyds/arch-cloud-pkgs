@@ -14,8 +14,8 @@ target/
 pkgs/*/extra_artifacts/
 pkgs/*/rtk-aarch64-android
 
-# neriplayer 构建期从 nightly.link 下载的 artifact 与解析出的元数据（防误提交）
-pkgs/neriplayer/NeriPlayer-Linux-x64-*.zip
+# neriplayer 构建期从上游 Release 下载的 deb（正常落在 SRCDEST，这里防意外落盘被提交）
+pkgs/neriplayer/NeriPlayer_*_amd64*.deb
 pkgs/neriplayer/build-metadata.txt
 
 # 本地工具目录
