@@ -13,6 +13,7 @@
 | clavis-shell | [StatIndet/quickshell](https://github.com/StatIndet/quickshell) | Clavis QML/Qt6 Shell；Actions 克隆上游 main 当前源码，先应用 `pkgs/clavis-shell/patches/*.patch`，再用上游 release.py 生成带日期版本的源码包和 PKGBUILD 后编译；AUR 运行库 libcava 与 qt6-m3shapes-git 也在同一云端任务源码构建并随 artifact 提供。需同时安装 key-cli artifact |
 | key-cli | [StatIndet/key-cli](https://github.com/StatIndet/key-cli) | Clavis 配套 CLI 与系统指标服务；Actions 克隆上游 main 当前源码并云端编译。artifact 仅包含 key-cli 本体，不包含需单独授权的键盘/CPU 权限包 |
 | neriplayer | [cwuom/NeriPlayer-Desktop](https://github.com/cwuom/NeriPlayer-Desktop) | 多源在线播放音乐客户端（Tauri 2 + Vue 3 + Rust 音频引擎，内置 FFmpeg 解码库）。上游 WIP 无 release，安装包只能从 GitHub Actions 的 Artifacts 工作流获取：经 nightly.link 取 main 分支最近一次成功构建的 zip artifact，解出官方 deb 重打包，版本 = 应用版本 + 构建 epoch，每次构建自动跟随当时最新构建。上游超 3 天无新构建时（artifact 过期）构建会报错终止，属预期 |
+| dux-files | [duxlabs-dev/dux-files](https://github.com/duxlabs-dev/dux-files) | Dux Labs 的 Wayland 文件管理器（Quickshell UI + Go daemon，UI 经 go:embed 内嵌进单文件二进制）。上游 release 直接发静态 linux-amd64/arm64 二进制与补全包，本包取 amd64 预编译产物重打包（不编译），桌面项/图标/polkit/D-Bus/portal/systemd 资产从同 tag raw 取源；版本自动跟随 `releases/latest`。运行时依赖 `quickshell`（官方仓库包）|
 
 ## 使用方法
 
@@ -31,6 +32,17 @@ sudo pacman -U *.pacman
 
 微信包仅构建 x86_64 版本，安装产物为官方 AppImage 解包后的原生 pacman 包，
 不需要 FUSE。若已安装其他会占用同名微信文件的原生 Linux 包，请按 pacman 提示先处理冲突。
+
+### Dux Files 安装
+
+dux-files 是官方预编译二进制重打包（UI 已内嵌，单文件），运行时需要官方仓库的
+`quickshell`（提供 `Quickshell.*` QML 模块与 `qs` 运行时）与 `qt6-declarative`，
+由 pacman 依赖自动拉取。PDF 预览另需可选的 `qt6-webengine`。
+与 AUR 的 `dux-files-bin` / `dux-files-git` 同装会争用 `/usr/bin/dfiles`，本包
+已声明 `conflicts`，按 pacman 提示先卸载即可。systemd 用户单元需自行启用：
+`systemctl --user enable --now dfiles`；作为默认文件管理器与 portal 后端也需
+用户主动开启（`xdg-mime default dev.duxlabs.files.desktop inode/directory`、
+`dfiles portal install`）。
 
 ### Clavis Shell 安装
 
@@ -70,6 +82,11 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
   （control Version 与文件名版本、zip 内 build-metadata 与解析时一致）+ 装包后
   `ldd` 兜底；`LICENSE`（GPL-3.0）从该次构建的 `build_git_sha` 对应 raw 流式计算
   SHA256 落地校验。上游 artifact 仅保留 3 天，超期未重建时构建 404 报错（预期）。
+- `dux-files`：release 资产自带 `dfiles-linux-amd64.gz.sha256` 与
+  `dfiles-completions-<ver>.tar.gz.sha256`，直接解析为二进制/补全包的 SHA256；
+  桌面项、图标、polkit、D-Bus、portal、systemd 单元、LICENSE、README 按同一 tag
+  从仓库 raw 流式计算 SHA256。全部由 makepkg 落地校验，另有体积下限、ELF 魔数与
+  `dfiles version` 的版本对账兜底。
 
 自动解析版本的包若长期不重建，产物会停留在上次解析的版本；每月 1 号的全量定时
 重建已覆盖这一点。若上游改动导致解析失败（仓库换名、资产命名变化等），构建会
@@ -95,7 +112,8 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 ```bash
 mkdir pkgs/<新包名>
 # 参照已有包的 PKGBUILD 编写：源码构建参照 rtk（Rust）；预编译重打包参照 wechat（AppImage）/
-# google-chrome（deb）/ neriplayer（zip 内 deb）；交叉编译参照 rtk-termux（cargo-ndk + NDK）
+# google-chrome（deb）/ neriplayer（zip 内 deb）/ dux-files（release 里的预编译二进制）；
+# 交叉编译参照 rtk-termux（cargo-ndk + NDK）
 git add && git commit && git push   # 自动触发构建
 ```
 

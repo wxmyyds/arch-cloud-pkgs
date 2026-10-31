@@ -1,0 +1,237 @@
+# Maintainer: wxmyyds <wxmyyds0601@163.com>
+# 云端构建版 dux-files：Dux Files 文件管理器（Quickshell UI + Go daemon，
+# UI 通过 go:embed 内嵌进单文件二进制）官方预编译产物重打包，零编译零依赖污染。
+#
+# 上游 release 提供 linux-amd64 / linux-arm64 的静态 Go 二进制（CGO_ENABLED=0）
+# 与 shell 补全包，本包直接取 amd64 产物重打包，不做源码编译。
+# 版本号跟随 releases/latest 的 302 重定向（GitHub API 兜底），每次构建自动取
+# 当时最新 stable；预发布 tag（含 "-"）不会出现在 latest，故 pkgver 恒为纯数字。
+#
+# 升级方法：无需修改 pkgver；每月定时重建或手动 workflow_dispatch 指定 dux-files
+#          即取当时最新 release。
+#
+# 校验：二进制与补全包的 SHA256 直接取自该 release 的 .sha256 资产，桌面项 /
+#      图标 / D-Bus / portal / polkit / systemd / LICENSE / README 按同一 tag 从
+#      仓库 raw 取源并流式计算 SHA256——makepkg 落地即校验，无需人工维护。
+#      另有体积下限、ELF 魔数与 `dfiles version` 版本对账兜底。
+#
+# 运行时依赖 quickshell（提供 Quickshell.* QML 模块）与 qt6-declarative；
+# PDF 预览额外需要 qt6-webengine（可选）。AUR 有 dux-files-bin / dux-files-git
+# 与本包同装会争用 /usr/bin/dfiles，故 conflicts。
+
+pkgname=dux-files
+pkgrel=1
+
+_dux_latest_tag() {
+    local tag
+    tag="$(curl -fsSI -o /dev/null -w '%{redirect_url}' \
+        'https://github.com/duxlabs-dev/dux-files/releases/latest' \
+        | sed -E 's|.*/tag/([^[:space:]]+).*|\1|' | tr -d '\r')"
+    if [[ -z "$tag" ]]; then
+        tag="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+            'https://api.github.com/repos/duxlabs-dev/dux-files/releases/latest' \
+            | awk -F'"' '/"tag_name":/{print $4; exit}')"
+    fi
+    [[ -n "$tag" ]] || return 1
+    printf '%s\n' "$tag"
+}
+
+_tag="$(_dux_latest_tag)" || {
+    echo >&2 "!! 无法解析 dux-files 最新 release tag，网络或仓库结构可能已变化"
+    exit 1
+}
+pkgver="${_tag#v}"
+[[ "$pkgver" =~ ^[0-9]+(\.[0-9]+)*$ ]] || {
+    echo >&2 "!! 解析出版本号异常：${pkgver:-（空）}"
+    exit 1
+}
+
+_urlrel="https://github.com/duxlabs-dev/dux-files/releases/download/${_tag}"
+_urlraw="https://raw.githubusercontent.com/duxlabs-dev/dux-files/${_tag}"
+
+# release 资产自带 .sha256（内容为 "<hash>  <文件名>"）；解析失败即终止
+_release_sha() {
+    local sha
+    sha="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 "$1" \
+        | awk '{print $1; exit}' | tr -d '\r')"
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || {
+        echo >&2 "!! 无法从 $1 解析 SHA256"
+        exit 1
+    }
+    printf '%s\n' "$sha"
+}
+
+# 仓库 raw 文件流式计算 SHA256（同 tag 内容，随版本自动更新）
+_raw_sha() {
+    local sha
+    sha="$(set -o pipefail; curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 "$1" \
+        | sha256sum | cut -d' ' -f1)" || {
+        echo >&2 "!! 获取 $1 失败"
+        exit 1
+    }
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || {
+        echo >&2 "!! $1 的 SHA256 异常"
+        exit 1
+    }
+    printf '%s\n' "$sha"
+}
+
+_bin_sha="$(_release_sha "${_urlrel}/dfiles-linux-amd64.gz.sha256")"
+_comp_sha="$(_release_sha "${_urlrel}/dfiles-completions-${pkgver}.tar.gz.sha256")"
+
+# 与 source 顺序严格一一对应
+_raw_paths=(
+    'LICENSE'
+    'README.md'
+    'assets/dev.duxlabs.files.desktop'
+    'assets/dev.duxlabs.files.metainfo.xml'
+    'assets/dev.duxlabs.files.policy'
+    'assets/dev.duxlabs.files.svg'
+    'assets/dbus/dev.duxlabs.files.FileManager1.service'
+    'assets/dbus/org.freedesktop.impl.portal.desktop.dfiles.service'
+    'assets/portal/dfiles.portal'
+    'assets/systemd/dfiles.service'
+)
+_raw_shas=()
+for _p in "${_raw_paths[@]}"; do
+    _raw_shas+=("$(_raw_sha "${_urlraw}/${_p}")")
+done
+
+pkgdesc="File manager for Wayland from Dux Labs (Quickshell UI + Go daemon) — upstream prebuilt binary repack"
+arch=('x86_64')
+url="https://github.com/duxlabs-dev/dux-files"
+license=('MIT')
+# 静态 Go 二进制内嵌 QML 界面，运行时由 quickshell 渲染
+depends=(
+    'quickshell'        # Quickshell.* QML 模块与 qs 运行时
+    'qt6-declarative'   # QtQuick 基础模块
+    'hicolor-icon-theme'
+)
+optdepends=(
+    'qt6-webengine: PDF previews'
+    'dms-shell: dynamic theming via Dux Shell colors'
+    'bubblewrap: run external thumbnailers in a sandbox'
+    'ffmpegthumbnailer: video thumbnails'
+    'poppler: PDF thumbnails'
+    'gvfs: network shares and the trash on removable drives'
+    'udisks2: the devices sidebar'
+    'polkit: retry denied operations as administrator'
+    'xdg-desktop-portal: use dfiles as the file chooser'
+)
+provides=('dfiles')
+conflicts=('dfiles' 'dux-files-bin' 'dux-files-git')
+makedepends=('desktop-file-utils')
+# 重打包保真：上游二进制已 strip，禁止二次 strip 与 debug 分包
+options=('!strip' '!debug')
+
+# gz 压缩的 ELF 无法被 makepkg 稳定识别，手动解压
+noextract=("dfiles-linux-amd64-${pkgver}.gz")
+
+source=(
+    "dfiles-linux-amd64-${pkgver}.gz::${_urlrel}/dfiles-linux-amd64.gz"
+    "dfiles-completions-${pkgver}.tar.gz::${_urlrel}/dfiles-completions-${pkgver}.tar.gz"
+    "LICENSE-${pkgver}::${_urlraw}/LICENSE"
+    "README-${pkgver}.md::${_urlraw}/README.md"
+    "dev.duxlabs.files-${pkgver}.desktop::${_urlraw}/assets/dev.duxlabs.files.desktop"
+    "dev.duxlabs.files-${pkgver}.metainfo.xml::${_urlraw}/assets/dev.duxlabs.files.metainfo.xml"
+    "dev.duxlabs.files-${pkgver}.policy::${_urlraw}/assets/dev.duxlabs.files.policy"
+    "dev.duxlabs.files-${pkgver}.svg::${_urlraw}/assets/dev.duxlabs.files.svg"
+    "dev.duxlabs.files.FileManager1-${pkgver}.service::${_urlraw}/assets/dbus/dev.duxlabs.files.FileManager1.service"
+    "org.freedesktop.impl.portal.desktop.dfiles-${pkgver}.service::${_urlraw}/assets/dbus/org.freedesktop.impl.portal.desktop.dfiles.service"
+    "dfiles-${pkgver}.portal::${_urlraw}/assets/portal/dfiles.portal"
+    "dfiles-${pkgver}.service::${_urlraw}/assets/systemd/dfiles.service"
+)
+sha256sums=(
+    "$_bin_sha"
+    "$_comp_sha"
+    "${_raw_shas[@]}"
+)
+
+prepare() {
+    cd "$srcdir"
+    local gz="dfiles-linux-amd64-${pkgver}.gz"
+    local bin="dfiles-linux-amd64-${pkgver}"
+
+    [[ -f "$gz" ]] || { echo >&2 "!! 源文件 $gz 缺失，下载未落盘"; return 1; }
+    local size
+    size="$(stat -L -c%s "$gz")"
+    if (( size < 10485760 )); then
+        echo >&2 "!! $gz 体积异常（${size} 字节），疑似错误响应或截断"
+        return 1
+    fi
+
+    gzip -dcf "$gz" > "$bin" || { echo >&2 "!! gzip 解压失败"; return 1; }
+    chmod 755 "$bin"
+
+    # ELF 魔数：拦截错误响应页/HTML 被当成二进制
+    if [[ "$(dd if="$bin" bs=1 count=4 2>/dev/null)" != $'\177ELF' ]]; then
+        echo >&2 "!! $bin 不是 ELF 文件，release 资产可能已变化"
+        return 1
+    fi
+    if (( $(stat -L -c%s "$bin") < 20971520 )); then
+        echo >&2 "!! $bin 体积异常，疑似非完整二进制"
+        return 1
+    fi
+
+    # 版本对账：二进制自报版本必须与解析出的 pkgver 一致，防止打包错版本
+    local bin_ver
+    bin_ver="$("./$bin" version 2>/dev/null | awk '{print $2}')"
+    if [[ "$bin_ver" != "$pkgver" ]]; then
+        echo >&2 "!! 版本对账失败：二进制版本 ${bin_ver:-（空）} ≠ ${pkgver}"
+        return 1
+    fi
+
+    # 补全包由 makepkg 自动解包，断言关键文件在位
+    [[ -f dfiles && -f _dfiles && -f dfiles.fish ]] || {
+        echo >&2 "!! 补全包解包结果不完整，上游结构可能已变化"
+        return 1
+    }
+    [[ -f "LICENSE-${pkgver}" && -f "README-${pkgver}.md" ]] || {
+        echo >&2 "!! LICENSE/README 未落盘"
+        return 1
+    }
+}
+
+package() {
+    cd "$srcdir"
+
+    # 主程序：UI 已内嵌，直接安装到 /usr/bin/dfiles（polkit/D-Bus/systemd 资产
+    # 均以该路径硬编码，见 package() 其余部分）
+    install -Dm755 "dfiles-linux-amd64-${pkgver}" "$pkgdir/usr/bin/dfiles"
+
+    # shell 补全
+    install -Dm644 dfiles "$pkgdir/usr/share/bash-completion/completions/dfiles"
+    install -Dm644 _dfiles "$pkgdir/usr/share/zsh/site-functions/_dfiles"
+    install -Dm644 dfiles.fish "$pkgdir/usr/share/fish/vendor_completions.d/dfiles.fish"
+
+    # 桌面集成
+    install -Dm644 "dev.duxlabs.files-${pkgver}.svg" \
+        "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.duxlabs.files.svg"
+    install -Dm644 "dev.duxlabs.files-${pkgver}.desktop" \
+        "$pkgdir/usr/share/applications/dev.duxlabs.files.desktop"
+    install -Dm644 "dev.duxlabs.files-${pkgver}.metainfo.xml" \
+        "$pkgdir/usr/share/metainfo/dev.duxlabs.files.metainfo.xml"
+    desktop-file-validate "$pkgdir/usr/share/applications/dev.duxlabs.files.desktop" || return 1
+
+    # polkit：上游 policy 已指向 /usr/bin/dfiles，原样安装即可
+    install -Dm644 "dev.duxlabs.files-${pkgver}.policy" \
+        "$pkgdir/usr/share/polkit-1/actions/dev.duxlabs.files.policy"
+
+    # D-Bus 激活（FileManager1 + portal 后端）
+    install -Dm644 "dev.duxlabs.files.FileManager1-${pkgver}.service" \
+        "$pkgdir/usr/share/dbus-1/services/dev.duxlabs.files.FileManager1.service"
+    install -Dm644 "org.freedesktop.impl.portal.desktop.dfiles-${pkgver}.service" \
+        "$pkgdir/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.dfiles.service"
+
+    # portal 后端注册（不写 portals.conf，是否启用由用户 dfiles portal install 决定）
+    install -Dm644 "dfiles-${pkgver}.portal" \
+        "$pkgdir/usr/share/xdg-desktop-portal/portals/dfiles.portal"
+
+    # systemd 用户单元（可选启用：systemctl --user enable --now dfiles）
+    install -Dm644 "dfiles-${pkgver}.service" \
+        "$pkgdir/usr/lib/systemd/user/dfiles.service"
+
+    # 许可证与文档
+    install -Dm644 "LICENSE-${pkgver}" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "README-${pkgver}.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
