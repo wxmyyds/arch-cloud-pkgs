@@ -6,10 +6,8 @@
 
 | 包名 | 上游 | 说明 |
 |------|------|------|
-| rtk-termux | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | 交叉编译的 Termux aarch64 版（上游只发 gnu/musl 预编译，没有 Bionic），版本构建时跟随最新 release。**不要在本机 Arch 上安装**，见下 |
 | wechat | [腾讯微信](https://linux.weixin.qq.com/) | 腾讯官方微信 Linux x86_64 AppImage 重打包为原生包；仅支持 x86_64，版本自动跟随官网，ARM 版暂未接入 |
 | google-chrome | [Google](https://www.google.com/chrome) | Google 官方 Chrome .deb 重打包；版本与 SHA256 从官方 apt 索引动态解析并由 makepkg 落地校验，打包逻辑对齐 AUR 同名包。`paru -Syu` 提示同版本"升级"时跳过 |
-| rtk | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | LLM token 节省代理，Rust musl 静态单文件零依赖。行为仿照官方 install.sh（302 解析 tag + checksums.txt 动态校验 + CWE-22 防御），装到 `/usr/bin/rtk`；装完删除手动装的 `~/.local/bin/rtk` |
 | clavis-shell | [StatIndet/quickshell](https://github.com/StatIndet/quickshell) | Clavis QML/Qt6 Shell；Actions 克隆上游 main 当前源码，先应用 `pkgs/clavis-shell/patches/*.patch`，再用上游 release.py 生成带日期版本的源码包和 PKGBUILD 后编译；AUR 运行库 libcava 与 qt6-m3shapes-git 也在同一云端任务源码构建并随 artifact 提供。需同时安装 key-cli artifact |
 | key-cli | [StatIndet/key-cli](https://github.com/StatIndet/key-cli) | Clavis 配套 CLI 与系统指标服务；Actions 克隆上游 main 当前源码并云端编译。artifact 仅包含 key-cli 本体，不包含需单独授权的键盘/CPU 权限包 |
 | neriplayer | [cwuom/NeriPlayer-Desktop](https://github.com/cwuom/NeriPlayer-Desktop) | 多源在线播放音乐客户端（Tauri 2 + Vue 3 + Rust 音频引擎，内置 FFmpeg 解码库）。上游已正式发 Release（tag 形如 `NeriPlayer-<sha7>.<MMDDHHMM>`，每个 Release 附 deb/rpm/AppImage 与 `SHA256SUMS.txt`）：本包取 `releases/latest` 的 tag，直接下载官方 amd64 deb 重打包，版本 = 应用版本 + 构建 epoch（`1.0.0.r<epoch>`）保持单调升级，每次上游发版自动跟随。deb 的 SHA256 直接取自该 Release 的 `SHA256SUMS.txt` 硬校验 |
@@ -55,10 +53,6 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 
 > 所有包的 artifact 统一**不含 `-debug` 调试符号包**：Arch 的 `makepkg.conf` 默认 `OPTIONS` 含 `debug`，源码构建类包会额外产出 `<pkg>-debug-*.pkg.tar.zst`（clavis-shell 约 18MB、key-cli 约 3.8MB），构建脚本在上传前统一删除（见 `.github/workflows/build.yml`）。
 
-**前置坑：**
-
-- `rtk-termux` 的 `arch=('aarch64')`，产物是 Android Bionic 二进制，**在 x86_64 主机上会被 pacman 的架构检查拦下**——这是刻意的保护，装进去会顶掉正常的 `/usr/bin/rtk`。
-  给 Termux 用的话取 artifact 里的裸二进制 `rtk-aarch64-android` 即可，不需要走 pacman。
 ### 升级某个包
 所有包的 `pkgver` 均在构建时自动解析上游最新版（release tag / apt 索引 / 官网页面 / 工作流构建产物），
 **无需改任何文件**：上游发版后定时重建（每月 1 号）或手动 workflow_dispatch 指定包名
@@ -67,10 +61,6 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 校验值的来源按包而异，均由 makepkg 下载后落地校验：
 
 - `google-chrome`：版本与 SHA256 从官方 apt `Packages` 索引解析。
-- `rtk`：deb/tarball 的 SHA256 从该 tag 的 `checksums.txt` 解析。
-- `rtk-termux`：GitHub archive 源码 tarball 动态生成、官方不承诺内容寻址，
-  `sha256sums` 为 `SKIP`；完整性由 `prepare()` 的体积下限 + `Cargo.toml`/`src/`
-  结构检查（version 与 `pkgver` 对账）兜底。
 - `wechat`：官网未提供固定 SHA-256，`sha256sums` 为 `SKIP`；完整性由
   `prepare()` 的体积下限、AppImage type-2 魔数和解包后的关键文件检查兜底。
   源文件名包含版本号，避免固定下载 URL 在 CI 的 `SRCDEST` 缓存中复用旧版本。
@@ -95,13 +85,41 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 但校验不一致会直接构建失败，不会产出混版本产物；浮动源（`SKIP`）的包靠
 `prepare()` 的结构检查兜底。
 
+### 上游发版自动检测（二期）
+
+`.github/nvchecker.toml` 用 [nvchecker](https://github.com/lilydjwg/nvchecker)
+逐包声明"上游版本怎么取"，`.github/workflows/check-updates.yml` 跑检测，有变化时
+调用 `gh workflow run build.yml -f packages=<包名>` 触发构建。每个条目的表名必须
+等于 `pkgs/` 下的目录名，检测结果只在包目录真实存在时才作为构建目标。
+
+来源按包性质选择：
+
+| 包 | 来源 | 说明 |
+|----|------|------|
+| `google-chrome` | `apt` | 直接读官方 apt 索引，`strip_release` 去掉 Debian revision，与 PKGBUILD 的 `${_debver%-*}` 一致 |
+| `wechat` | `regex` | 官网 SSR 的 `class="main-section__bd-version"` 块；用 class 前缀锚定，避免误命中同名 CSS 文本 |
+| `neriplayer` / `dux-files` | `github` + `use_latest_release` | 跟踪 release tag |
+| `clavis-shell` / `key-cli` | `github` + `branch = "main"` | 两端都是"克隆 main 当前源码"构建，发版覆盖不全，故跟踪提交时间 |
+
+只把检测结果当**变更信号**：最终 `pkgver` 与校验值仍由各 PKGBUILD 构建时自行解析，
+因此 dux-files 的 `v2.0.0` 这类带前缀的取值不需要与 pkgver 同形。
+
+基线放在 `.github/nvchecker/oldver.json`（提交进仓库），`newver.json` 每轮生成且
+已 gitignore。检测脚本只有在**全部条目都取到版本**时才允许推进基线，避免一次网络
+抽风把基线写成空值后该包再也检测不到更新；某条目取不到时会在日志与 job summary
+里以 `missing` 列出，但不阻断其余包的检测。
+
+**默认禁用**：`check-updates.yml` 的 `schedule` 已注释，手动触发时 `dry_run` 默认
+`true`（只检测、只写日志与 summary）。上线时取消 `schedule` 注释即可全天候自动
+检测；定时触发不受 `dry_run` 约束。
+
 ## 构建加速
 
 - **只构建变更的包**：push 时按 diff 选出改动涉及的包，也可手动指定单个包
 - **并行构建**：多个包同时变更时，每个包一个独立 job（matrix）并行执行，互不影响；产物也按包分别上传
 - **缓存分层**：
-  - 工具链层（跨包共享）：NDK、cargo registry/git、`SRCDEST` 源码下载副本——都是内容寻址的只读资源
-  - 包层（按包隔离）：`cache_dirs` 声明的编译目录（Rust 约定 `target/`），key 含包名 + PKGBUILD + build.conf + NDK 版本 + 架构
+  - 工具链层（跨包共享）：cargo registry/git、`SRCDEST` 源码下载副本（以及启用时的 NDK）——都是内容寻址的只读资源
+  - 包层（按包隔离）：`cache_dirs` 声明的编译目录（Rust 约定 `target/`），key 含包名 + PKGBUILD + build.conf + 工具链版本 + 架构
   - `src/`（解压后的源码现场）**不缓存**，每次由 makepkg 从 `SRCDEST` 重新获取，避免"源码与中间产物混杂"的脏缓存
   - 缓存受 GitHub 10GB/仓库 配额限制，旧版本缓存会自动淘汰
 - **自动取消**：同一分支的新提交会取消仍在跑的旧构建，避免浪费 runner
@@ -110,9 +128,9 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 
 ```bash
 mkdir pkgs/<新包名>
-# 参照已有包的 PKGBUILD 编写：源码构建参照 rtk（Rust）；预编译重打包参照 wechat（AppImage）/
-# google-chrome（deb）/ neriplayer（release 里的官方 deb）/ dux-files（release 里的预编译二进制）；
-# 交叉编译参照 rtk-termux（cargo-ndk + NDK）
+# 参照已有包的 PKGBUILD 编写：源码构建参照 clavis-shell（CI 克隆上游 main）；
+# 预编译重打包参照 wechat（AppImage）/ google-chrome（deb）/
+# neriplayer（release 里的官方 deb）/ dux-files（release 里的预编译二进制）
 git add && git commit && git push   # 自动触发构建
 ```
 
@@ -137,10 +155,12 @@ git add && git commit && git push   # 自动触发构建
 - 构建在 `archlinux:base-devel` 官方容器中进行，glibc 与本机滚动版本一致
 - makepkg 以普通用户 `builder`（带 NOPASSWD sudo）运行，可自动解析 makedepends
 - `sudo -u builder` 会重置环境变量，workflow 里写进 `GITHUB_ENV` 的值进不了 makepkg。
-  所以 NDK 路径、`CARGO_HOME`、`RUSTUP_HOME` 在 PKGBUILD 里都用同样的默认值又兜底了一遍
-  ——**改路径时 `prepare-toolchain.sh` 和对应 PKGBUILD 要同步改**
+  所以 `CARGO_HOME`、`RUSTUP_HOME`（以及 NDK 路径，若启用）在 PKGBUILD 里都用同样的
+  默认值又兜底了一遍——**改路径时 `prepare-toolchain.sh` 和对应 PKGBUILD 要同步改**
 - 交叉编译包只声明 `rustup`，不要和 `rust` 同时写进 `makedepends`：
   Arch 的 rustup 包 `conflicts=('cargo' 'rust' 'rustfmt')`，两者互斥
+- NDK / 交叉编译这套能力仍保留在 `prepare-toolchain.sh` 与 `build.conf` 里，但当前
+  没有包在用（原先唯一的使用者 `rtk-termux` 已移除）
 - 工作流里所有 GitHub 上下文都经 `env:` 传入，不在 `run:` 里直接写 `${{ }}`——
   后者是 shell 解析前的纯文本替换，`workflow_dispatch` 输入里带个分号就能执行任意命令
 - 重打包预编译产物的包一律声明 `options=('!strip' '!debug')`：makepkg 默认 strip 会改动上游二进制，保真才能让产物与上游逐字节一致
@@ -150,7 +170,7 @@ git add && git commit && git push   # 自动触发构建
 ## Roadmap
 
 - [x] 一期：增量构建（只构建变更的包）+ 并行 matrix + cargo 缓存
-- [ ] 二期：nvchecker 自动检测上游发版并触发构建
+- [ ] 二期：nvchecker 自动检测上游发版并触发构建（代码已实现，`schedule` 默认注释掉）
 - [ ] 三期：Git Tag + Release 作为分发通道（每个版本一个 tag `pkg@ver-rel`，Release
   描述存该版本全部元数据，Assets 只放安装包），由轻量包管理器读取并安装
 

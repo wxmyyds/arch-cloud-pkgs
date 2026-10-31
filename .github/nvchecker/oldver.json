@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "data": {
+    "clavis-shell": {
+      "version": "20261007.063828"
+    },
+    "dux-files": {
+      "version": "v2.0.0"
+    },
+    "google-chrome": {
+      "version": "156.0.8078.79"
+    },
+    "key-cli": {
+      "version": "20260928.054403"
+    },
+    "neriplayer": {
+      "version": "NeriPlayer-bad6270.10281721"
+    },
+    "wechat": {
+      "version": "4.1.13"
+    }
+  }
+}

@@ -1,0 +1,126 @@
+name: Check upstream updates
+
+# =====================================================================
+# 二期：自动检测上游发版并触发构建。
+#
+# 现状：代码已实现，但**默认禁用**——
+#   1. 定时触发被注释掉，只有手动 workflow_dispatch 会跑；
+#   2. 手动跑时也要显式传 dry_run=false（默认 true 只检测不构建），
+#      便于上线前先观察几轮判定是否准确。
+#
+# 启用方法：取消下面 schedule 的注释。定时触发会真正触发构建并推进基线。
+# =====================================================================
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只检测不触发构建'
+        required: false
+        default: true
+        type: boolean
+  # 二期暂不启用，取消注释即开始每日自动检测
+  # schedule:
+  #   - cron: '23 5 * * *'
+
+permissions:
+  # 推进基线需要提交 oldver.json；触发 build.yml 需要 actions: write
+  contents: write
+  actions: write
+
+# 同一时刻只允许一轮检测，避免两次运行同时推进基线
+concurrency:
+  group: check-upstream-updates
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container:
+      image: archlinux:base-devel
+    env:
+      # nvchecker 的 github 源用这个提高 API 配额；不配置也能跑（匿名 60 次/小时）
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: 检测上游新版本
+        id: check
+        run: bash .github/scripts/check-upstream-updates.sh
+
+      - name: 汇总检测结果
+        env:
+          HAS_UPDATES: ${{ steps.check.outputs.has_updates }}
+          CHANGED: ${{ steps.check.outputs.changed }}
+          MISSING: ${{ steps.check.outputs.missing }}
+        run: |
+          set -euo pipefail
+          echo "有更新: ${HAS_UPDATES}"
+          echo "变化包: ${CHANGED:-（无）}"
+          echo "未取到版本: ${MISSING:-（无）}"
+          {
+            echo "### 上游发版检测"
+            echo
+            echo "- 有更新：\`${HAS_UPDATES}\`"
+            echo "- 变化包：\`${CHANGED:-无}\`"
+            echo "- 未取到版本：\`${MISSING:-无}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 触发构建
+        if: steps.check.outputs.has_updates == 'true' && inputs.dry_run != true
+        env:
+          CHANGED: ${{ steps.check.outputs.changed }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # 容器里没有 gh，装上；每次运行都是全新容器，无法跨轮缓存
+          command -v gh >/dev/null 2>&1 || pacman -S --needed --noconfirm github-cli >/dev/null
+          # CHANGED 是空格分隔的包名，全部来自 nvchecker.toml 的表名，
+          # 且已由脚本过滤成 pkgs/ 下真实存在的目录；这里再按字符集兜一次底。
+          read -r -a pkgs <<< "$CHANGED"
+          for p in "${pkgs[@]}"; do
+            if [[ ! "$p" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::非法包名 '$p'"
+              exit 1
+            fi
+          done
+          joined="$(IFS=,; printf '%s' "${pkgs[*]}")"
+          echo "触发构建: $joined"
+          gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref main -f "packages=$joined"
+
+      - name: 推进版本基线
+        # 只在真正触发构建且全部条目都取到版本时提交：把一次网络抽风的结果
+        # 固化成基线，会让该包此后永远检测不到更新。
+        if: >-
+          steps.check.outputs.has_updates == 'true'
+          && inputs.dry_run != true
+          && steps.check.outputs.missing == ''
+        env:
+          CHANGED: ${{ steps.check.outputs.changed }}
+        run: |
+          set -euo pipefail
+          # 只改 .github/nvchecker/oldver.json；该路径不在 build.yml 的 paths
+          # 过滤里，因此这次提交不会触发额外构建。
+          cp -f .github/nvchecker/newver.json .github/nvchecker/oldver.json
+          if git diff --quiet -- .github/nvchecker/oldver.json; then
+            echo "基线无变化"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/nvchecker/oldver.json
+          git commit -m "chore(nvchecker): bump baseline for ${CHANGED// /, }"
+          git push origin HEAD:main
+
+      - name: 上传检测记录
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: nvchecker-run
+          path: |
+            .github/nvchecker/newver.json
+            .github/nvchecker/oldver.json
+          retention-days: 14
+          if-no-files-found: warn

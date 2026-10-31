@@ -1,0 +1,60 @@
+# 二期：nvchecker 配置 —— 自动发现上游发版，交给 check-updates 工作流触发构建。
+#
+# 约定：每个表名必须等于 pkgs/ 下的包目录名。工作流据此把"有新版本"的条目映射成
+# 构建目标，表名对不上会告警并忽略（见 .github/scripts/check-upstream-updates.sh）。
+#
+# 这里只回答"上游有没有出现新版"，不负责确定最终版本号与校验值——那仍由各
+# PKGBUILD 在构建时自行解析（release tag / apt 索引 / 官网页面）。因此即便这里
+# 的取值形态与 pkgver 不完全一致（例如 dux-files 的 tag 带 v 前缀），也只是
+# 变更信号，不会把错误版本打进包里。
+
+[__config__]
+oldver = "nvchecker/oldver.json"
+newver = "nvchecker/newver.json"
+# 官网页面偶尔很慢，放宽到 30 秒；并发压到 4，避免某个源超时拖垮整轮
+http_timeout = 30
+max_concurrency = 4
+
+# Google Chrome stable：直接读官方 apt 索引里的最高版本，去掉 Debian revision
+# （PKGBUILD 里 pkgver 同样是 `${_debver%-*}`）
+[google-chrome]
+source = "apt"
+mirror = "https://dl.google.com/linux/chrome/deb"
+suite = "stable"
+repo = "main"
+arch = "amd64"
+pkg = "google-chrome-stable"
+strip_release = true
+
+# 微信 Linux：官网服务端渲染的版本块。
+# 用 class="..." 前缀锚定，避免误命中页面里同名的 CSS 选择器文本。
+[wechat]
+source = "regex"
+url = "https://linux.weixin.qq.com/"
+encoding = "utf-8"
+regex = 'class="main-section__bd-version"[^>]*>([0-9]+(?:\.[0-9]+)+)</div>'
+
+# NeriPlayer：上游每次构建都发一个 Release，tag 形如 NeriPlayer-<sha7>.<MMDDHHMM>，
+# tag 本身就是变更信号（pkgver 另有 .r<build_epoch> 后缀，由 PKGBUILD 解析）
+[neriplayer]
+source = "github"
+github = "cwuom/NeriPlayer-Desktop"
+use_latest_release = true
+
+# dux-files：tag 形如 v2.0.0
+[dux-files]
+source = "github"
+github = "duxlabs-dev/dux-files"
+use_latest_release = true
+
+# Clavis 两件套是"克隆上游 main 当前源码"构建的，因此跟踪 main 的最新提交时间
+# 而不是 release tag——上游发版并不覆盖所有提交。
+[clavis-shell]
+source = "github"
+github = "StatIndet/quickshell"
+branch = "main"
+
+[key-cli]
+source = "github"
+github = "StatIndet/key-cli"
+branch = "main"

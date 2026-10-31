@@ -334,7 +334,7 @@ jobs:
           fi
           # 缓存以 root 恢复，先归还给 builder（读写都需要）
           chown -R builder:builder "$d" /home/builder/.cargo /opt/cache/sources
-          # makepkg 额外参数（如 rtk-termux 交叉编译需要 --ignorearch）
+          # makepkg 额外参数（交叉编译类包需要 --ignorearch）
           read -r -a FLAGS <<< "$MAKEPKG_FLAGS"
           # 无图形会话的构建用户需要一个私有运行时目录与离屏平台：
           # key-cli 的 Python 测试要求 XDG_RUNTIME_DIR；
@@ -363,7 +363,7 @@ jobs:
           for f in "$d"/*.pkg.tar.zst; do
             mv "$f" "${f%.pkg.tar.zst}.pacman"
           done
-          # 收集 build.conf 声明的额外产物（如 rtk-aarch64-android）供上传
+          # 收集 build.conf 声明的额外产物（.pacman 之外需要一并上传的文件）供上传
           if [ -n "$EXTRA_ARTIFACTS" ]; then
             mkdir -p "$d/extra_artifacts"
             # shellcheck disable=SC2086  # 需要按空格拆分成多个文件名
@@ -379,7 +379,7 @@ jobs:
           echo "::endgroup::"
 
       # 构建成功不等于包可用：把元信息打进日志，并跑一遍 namcap。
-      # 交叉编译的包（如 rtk-termux）会出现预期的架构相关告警，故不作失败判据。
+      # 交叉编译的包会出现预期的架构相关告警，故不作失败判据。
       - name: 校验产物
         env:
           NAMCAP_CHECK: ${{ steps.conf.outputs.namcap_check }}
@@ -398,18 +398,6 @@ jobs:
             pacman -Qip "$f"
           done
           echo "::endgroup::"
-          if [ "$PKG" = "rtk-termux" ]; then
-            echo "::group::Android ELF 检查 $PKG"
-            android_bin="$d/extra_artifacts/rtk-aarch64-android"
-            if [ ! -f "$android_bin" ]; then
-              echo "::error::缺少 Android 额外产物 $android_bin"
-              exit 1
-            fi
-            file "$android_bin"
-            readelf -h "$android_bin" | grep -E 'Class:|Machine:|OS/ABI:'
-            file "$android_bin" | grep -Eiq 'aarch64|ARM aarch64|Android'
-            echo "::endgroup::"
-          fi
           if [ "$NAMCAP_CHECK" = "true" ]; then
             pacman -S --needed --noconfirm namcap
             echo "::group::namcap $PKG"

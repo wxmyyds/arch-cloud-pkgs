@@ -9,14 +9,15 @@ pkg/
 target/
 .deps/
 
-# PKGBUILD 额外吐出的裸二进制（见 build.conf 的 extra_artifacts）
-# 以及工作流收集它们时用到的临时目录
+# 工作流收集 build.conf 的 extra_artifacts 时用到的临时目录
 pkgs/*/extra_artifacts/
-pkgs/*/rtk-aarch64-android
 
 # neriplayer 构建期从上游 Release 下载的 deb（正常落在 SRCDEST，这里防意外落盘被提交）
 pkgs/neriplayer/NeriPlayer_*_amd64*.deb
 pkgs/neriplayer/build-metadata.txt
+
+# nvchecker 每轮检测的产物：newver 由检测脚本生成，oldver 是提交进仓库的基线
+.github/nvchecker/newver.json
 
 # 本地工具目录
 .workbuddy-ai/
