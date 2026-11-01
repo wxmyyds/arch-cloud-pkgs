@@ -1,12 +1,11 @@
 use anyhow::{Context, Result, bail, ensure};
-use clap::{Parser, Subcommand};
 use reqwest::blocking::{Client as HttpClient, Response};
 use reqwest::header::{ACCEPT, AUTHORIZATION, LINK};
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
-use std::ffi::{OsStr, OsString};
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -19,34 +18,14 @@ const MANIFEST_ACCEPT: &str = "application/vnd.oci.image.manifest.v1+json, appli
 const PKGINFO_ANNOTATION: &str = "org.wxmyyds.cpkg.pkginfo";
 const LAYER_MEDIA_TYPE: &str = "application/vnd.wxmyyds.cpkg.pkg.v1";
 
-#[derive(Parser)]
-#[command(
-    name = "cpkg",
-    version,
-    about = "Cloud package client with pacman argument passthrough",
-    after_help = "Cloud search: cpkg -Ss <pattern> (matches package name and description)",
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    #[command(name = "ls")]
-    List { package: Option<String> },
-    Check { package: Option<String> },
-    Install {
-        packages: Vec<String>,
-        #[arg(long)]
-        version: Option<String>,
-        #[arg(last = true)]
-        pacman_args: Vec<OsString>,
-    },
-    Upgrade {
-        #[arg(last = true)]
-        pacman_args: Vec<OsString>,
-    },
+#[derive(Debug)]
+enum PacmanAction {
+    List,
+    Info(Vec<String>),
+    Search(String),
+    Check(Vec<String>),
+    Install(Vec<(String, Option<String>)>, Vec<OsString>),
+    Upgrade(Vec<OsString>),
 }
 
 #[derive(Debug, Deserialize)]
@@ -326,22 +305,20 @@ fn pacman_command() -> Command {
 
 fn is_sync_sysupgrade(args: &[OsString]) -> bool {
     let values = args.iter().filter_map(|arg| arg.to_str());
-    let (mut sync, mut refresh, mut sysupgrade) = (false, false, false);
+    let (mut sync, mut sysupgrade) = (false, false);
     for value in values {
         if value == "--" { break; }
         match value {
             "--sync" => sync = true,
-            "--refresh" => refresh = true,
             "--sysupgrade" => sysupgrade = true,
             _ if value.starts_with('-') && !value.starts_with("--") => {
                 sync |= value[1..].contains('S');
-                refresh |= value[1..].contains('y');
                 sysupgrade |= value[1..].contains('u');
             }
             _ => {}
         }
     }
-    sync && refresh && sysupgrade
+    sync && sysupgrade
 }
 
 fn cloud_upgrade_args(args: &[OsString]) -> Vec<OsString> {
@@ -363,14 +340,6 @@ fn cloud_upgrade_args(args: &[OsString]) -> Vec<OsString> {
         }
     }
     result
-}
-
-fn run_pacman_passthrough(args: &[OsString]) -> Result<()> {
-    let mut command = pacman_command();
-    if !is_root() { command.arg("pacman"); }
-    command.args(args);
-    ensure!(command.status()?.success(), "pacman command failed");
-    Ok(())
 }
 
 fn parse_search_args(args: &[OsString]) -> Result<Option<String>> {
@@ -418,18 +387,135 @@ fn search_packages(http: &HttpClient, catalog: &Catalog, query: &str) -> Result<
     Ok(())
 }
 
-fn cloud_shorthand(args: &[OsString]) -> Result<Option<(Vec<String>, Vec<OsString>)>> {
-    let Some(first) = args.first().and_then(|arg| arg.to_str()) else { return Ok(None); };
-    if first.starts_with('-') || matches!(first, "ls" | "check" | "install" | "upgrade") {
-        return Ok(None);
-    }
-    let separator = args.iter().position(|arg| arg.as_os_str() == OsStr::new("--")).unwrap_or(args.len());
-    let packages = args[..separator]
-        .iter()
+fn is_sync_list(args: &[OsString]) -> bool {
+    args.first().and_then(|arg| arg.to_str()).is_some_and(|first| {
+        first == "-Sl" || (first == "--sync" && args.get(1).and_then(|arg| arg.to_str()) == Some("--list"))
+    })
+}
+
+fn is_sync_info(args: &[OsString]) -> bool {
+    args.first().and_then(|arg| arg.to_str()).is_some_and(|first| {
+        first == "-Si" || (first == "--sync" && args.get(1).and_then(|arg| arg.to_str()) == Some("--info"))
+    })
+}
+
+fn parse_info_targets(args: &[OsString]) -> Result<Vec<String>> {
+    let start = if args.first().and_then(|arg| arg.to_str()) == Some("--sync") { 2 } else { 1 };
+    let targets = args[start..].iter()
         .map(|arg| arg.to_str().context("package names must be valid UTF-8").map(str::to_owned))
         .collect::<Result<Vec<_>>>()?;
-    let pacman_args = if separator < args.len() { args[separator + 1..].to_vec() } else { Vec::new() };
-    Ok(Some((packages, pacman_args)))
+    ensure!(!targets.is_empty(), "usage: cpkg -Si <package>");
+    Ok(targets)
+}
+
+fn is_query_upgrades(args: &[OsString]) -> bool {
+    args.first().and_then(|arg| arg.to_str()).is_some_and(|first| {
+        first == "-Qu" || (first == "--query" && args.get(1).and_then(|arg| arg.to_str()) == Some("--upgrades"))
+    })
+}
+
+fn pacman_option_takes_value(option: &str) -> bool {
+    matches!(option,
+        "--arch" | "--ask" | "--assume-installed" | "--cachedir" | "--color" | "--config"
+        | "--dbpath" | "--gpgdir" | "--hookdir" | "--ignore" | "--ignoregroup"
+        | "--logfile" | "--overwrite" | "--print-format" | "--root" | "--sysroot"
+        | "-b" | "-r")
+}
+
+fn parse_install_args(args: &[OsString]) -> Result<(Vec<(String, Option<String>)>, Vec<OsString>)> {
+    let first = args.first().and_then(|arg| arg.to_str()).context("missing pacman operation")?;
+    let mut pacman_args = Vec::new();
+    let mut targets = Vec::new();
+    let mut options_ended = false;
+    let mut expect_option_value = false;
+
+    if first == "--sync" {
+        for arg in &args[1..] {
+            let value = arg.to_str();
+            if expect_option_value {
+                pacman_args.push(arg.clone());
+                expect_option_value = false;
+                continue;
+            }
+            let Some(value) = value else {
+                pacman_args.push(arg.clone());
+                continue;
+            };
+            if matches!(value, "--refresh" | "-y") { continue; }
+            if value == "--" { options_ended = true; continue; }
+            if !options_ended && value.starts_with('-') {
+                expect_option_value = pacman_option_takes_value(value);
+                pacman_args.push(arg.clone());
+            } else {
+                targets.push(parse_package_target(value)?);
+            }
+        }
+    } else {
+        let remainder: String = first.strip_prefix('-').unwrap_or(first).chars().filter(|flag| !matches!(flag, 'S' | 'y')).collect();
+        if !remainder.is_empty() { pacman_args.push(OsString::from(format!("-{remainder}"))); }
+        for arg in &args[1..] {
+            let value = arg.to_str();
+            if expect_option_value {
+                pacman_args.push(arg.clone());
+                expect_option_value = false;
+                continue;
+            }
+            let Some(value) = value else {
+                pacman_args.push(arg.clone());
+                continue;
+            };
+            if matches!(value, "--refresh" | "-y") { continue; }
+            if value == "--" { options_ended = true; continue; }
+            if !options_ended && value.starts_with('-') {
+                expect_option_value = pacman_option_takes_value(value);
+                pacman_args.push(arg.clone());
+            } else {
+                targets.push(parse_package_target(value)?);
+            }
+        }
+    }
+    ensure!(!expect_option_value, "missing value for pacman option");
+    ensure!(!targets.is_empty(), "usage: cpkg -S <package[=version]...>");
+    Ok((targets, pacman_args))
+}
+
+fn parse_package_target(target: &str) -> Result<(String, Option<String>)> {
+    let (name, version) = match target.split_once('=') {
+        Some((name, version)) => {
+            ensure!(!version.is_empty(), "package version cannot be empty: {target}");
+            (name, Some(version.to_owned()))
+        }
+        None => (target, None),
+    };
+    ensure!(valid_package_name(name), "invalid package target: {target}");
+    Ok((name.to_owned(), version))
+}
+
+fn pacman_action(args: &[OsString]) -> Result<PacmanAction> {
+    let first = args.first().and_then(|arg| arg.to_str()).context("usage: cpkg <pacman operation>")?;
+    if let Some(query) = parse_search_args(args)? {
+        return Ok(PacmanAction::Search(query));
+    }
+    if is_sync_list(args) { return Ok(PacmanAction::List); }
+    if is_sync_info(args) { return Ok(PacmanAction::Info(parse_info_targets(args)?)); }
+    if is_query_upgrades(args) {
+        let start = if first == "--query" { 2 } else { 1 };
+        let packages = args[start..].iter()
+            .map(|arg| arg.to_str().context("package names must be valid UTF-8").map(str::to_owned))
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(PacmanAction::Check(packages));
+    }
+    if is_sync_sysupgrade(args) {
+        return Ok(PacmanAction::Upgrade(cloud_upgrade_args(args)));
+    }
+    if first == "-S" || first == "--sync" || (first.starts_with("-S") && !first.starts_with("--")) {
+        let (targets, pacman_args) = parse_install_args(args)?;
+        return Ok(PacmanAction::Install(targets, pacman_args));
+    }
+    if first.starts_with('-') {
+        bail!("cpkg only handles cloud package operations; use pacman directly for removal and other local operations")
+    }
+    bail!("only pacman-style cloud operations are supported; see 'cpkg --help'")
 }
 
 fn catalog_package<'a>(catalog: &'a Catalog, name: &str) -> Result<&'a CatalogPackage> {
@@ -440,39 +526,34 @@ fn registry_for(http: &HttpClient, catalog: &Catalog, name: &str) -> Result<Regi
     RegistryClient::new(http.clone(), catalog_package(catalog, name)?)
 }
 
+fn print_help() {
+    println!("cpkg {} - GHCR cloud package client", env!("CARGO_PKG_VERSION"));
+    println!("\nPacman-style operations:");
+    println!("  cpkg -Sl                         List cloud packages");
+    println!("  cpkg -Si <package>               Show package information");
+    println!("  cpkg -Ss <pattern>               Search package names and descriptions");
+    println!("  cpkg -Qu [package]               Check cloud package updates");
+    println!("  cpkg -S <package[=version]...>  Install cloud packages");
+    println!("  cpkg -Syu [options]              Upgrade installed cloud packages");
+    println!("\nFor removal and other local package operations, run pacman directly.");
+}
+
 fn run() -> Result<()> {
-    let args: Vec<OsString> = std::env::args_os().collect();
-    let search_query = parse_search_args(&args[1..])?;
-    let sync_sysupgrade = is_sync_sysupgrade(&args[1..]);
-    if let Some(first) = args.get(1).and_then(|arg| arg.to_str()) {
-        if first.starts_with('-') && search_query.is_none() && !sync_sysupgrade && !matches!(first, "--help" | "--version") {
-            return run_pacman_passthrough(&args[1..]);
-        }
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if args.is_empty() || args.first().and_then(|arg| arg.to_str()) == Some("--help") {
+        print_help();
+        return Ok(());
     }
-    let shorthand = cloud_shorthand(&args[1..])?;
-    let cli = if shorthand.is_none() && search_query.is_none() && !sync_sysupgrade { Some(Cli::try_parse_from(args.clone())?) } else { None };
+    if args.first().and_then(|arg| arg.to_str()) == Some("--version") {
+        println!("cpkg {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    let action = pacman_action(&args)?;
     let http = HttpClient::builder().user_agent(concat!("cpkg/", env!("CARGO_PKG_VERSION"))).build()?;
     let catalog = Catalog::load(&http)?;
-    if sync_sysupgrade {
-        return upgrade(&http, &catalog, &cloud_upgrade_args(&args[1..]));
-    }
-    if let Some(query) = search_query {
-        return search_packages(&http, &catalog, &query);
-    }
-    if let Some((packages, pacman_args)) = shorthand {
-        return install_many(&http, &catalog, &packages, None, &pacman_args);
-    }
-    match cli.context("missing cpkg command")?.command {
-        Commands::List { package: Some(package) } => {
-            let registry = registry_for(&http, &catalog, &package)?;
-            let selected = registry.latest_version()?;
-            let metadata = registry.metadata(&selected, &package)?;
-            println!("{} {} ({})", metadata.name, metadata.version, metadata.architecture);
-            println!("{}", metadata.description);
-            println!("OCI layer: {} bytes, {}", metadata.layer.size, metadata.layer.digest);
-            println!("\n{}", metadata.pkginfo);
-        }
-        Commands::List { package: None } => {
+    match action {
+        PacmanAction::List => {
             for package in &catalog.packages {
                 match registry_for(&http, &catalog, &package.name).and_then(|registry| registry.latest_version()) {
                     Ok(version) => println!("{:<20} {:<24} {}", package.name, version, package.description),
@@ -480,34 +561,46 @@ fn run() -> Result<()> {
                 }
             }
         }
-        Commands::Check { package } => {
-            let packages: Vec<&CatalogPackage> = match package {
-                Some(name) => vec![catalog.find(&name)?],
-                None => catalog.packages.iter().collect(),
-            };
-            let mut updates = 0;
+        PacmanAction::Info(packages) => {
             for package in packages {
-                let Some(current) = installed_version(&package.name) else { continue; };
-                let registry = registry_for(&http, &catalog, &package.name)?;
-                let latest = registry.latest_version()?;
-                match vercmp(&latest, &current)? {
-                    1 => { println!("{}: {} -> {}", package.name, current, latest); updates += 1; }
-                    0 => println!("{}: up to date ({current})", package.name),
-                    _ => println!("{}: local {} is newer than cloud {} (no downgrade)", package.name, current, latest),
-                }
+                let registry = registry_for(&http, &catalog, &package)?;
+                let selected = registry.latest_version()?;
+                let metadata = registry.metadata(&selected, &package)?;
+                println!("{} {} ({})", metadata.name, metadata.version, metadata.architecture);
+                println!("{}", metadata.description);
+                println!("OCI layer: {} bytes, {}", metadata.layer.size, metadata.layer.digest);
+                println!("\n{}", metadata.pkginfo);
             }
-            if updates == 0 { println!("No updates available."); }
         }
-        Commands::Install { packages, version, pacman_args } => {
-            ensure!(version.is_none() || packages.len() == 1, "--version can only be used with one package");
-            install_many(&http, &catalog, &packages, version.as_deref(), &pacman_args)?;
-        }
-        Commands::Upgrade { pacman_args } => {
-            upgrade(&http, &catalog, &pacman_args)?;
-        }
+        PacmanAction::Search(query) => search_packages(&http, &catalog, &query)?,
+        PacmanAction::Check(packages) => check_updates(&http, &catalog, &packages)?,
+        PacmanAction::Install(targets, pacman_args) => install_many(&http, &catalog, &targets, &pacman_args)?,
+        PacmanAction::Upgrade(pacman_args) => upgrade(&http, &catalog, &pacman_args)?,
     }
     Ok(())
 }
+
+fn check_updates(http: &HttpClient, catalog: &Catalog, names: &[String]) -> Result<()> {
+    let packages: Vec<&CatalogPackage> = if names.is_empty() {
+        catalog.packages.iter().collect()
+    } else {
+        names.iter().map(|name| catalog.find(name)).collect::<Result<Vec<_>>>()?
+    };
+    let mut updates = 0;
+    for package in packages {
+        let Some(current) = installed_version(&package.name) else { continue; };
+        let registry = registry_for(http, catalog, &package.name)?;
+        let latest = registry.latest_version()?;
+        match vercmp(&latest, &current)? {
+            1 => { println!("{}: {} -> {}", package.name, current, latest); updates += 1; }
+            0 => println!("{}: up to date ({current})", package.name),
+            _ => println!("{}: local {} is newer than cloud {} (no downgrade)", package.name, current, latest),
+        }
+    }
+    if updates == 0 { println!("No updates available."); }
+    Ok(())
+}
+
 
 fn dependency_order(catalog: &Catalog, roots: &[String]) -> Result<Vec<String>> {
     fn visit(
@@ -541,20 +634,21 @@ fn dependency_order(catalog: &Catalog, roots: &[String]) -> Result<Vec<String>> 
 fn install_many(
     http: &HttpClient,
     catalog: &Catalog,
-    packages: &[String],
-    requested: Option<&str>,
+    targets: &[(String, Option<String>)],
     pacman_args: &[OsString],
 ) -> Result<()> {
-    ensure!(!packages.is_empty(), "specify at least one package to install");
-    let order = dependency_order(catalog, packages)?;
-    let roots: HashSet<&str> = packages.iter().map(String::as_str).collect();
+    ensure!(!targets.is_empty(), "specify at least one package to install");
+    let requested_versions: HashMap<String, Option<String>> = targets.iter().cloned().collect();
+    let roots: Vec<String> = targets.iter().map(|(name, _)| name.clone()).collect();
+    let order = dependency_order(catalog, &roots)?;
     let mut selected_packages = Vec::new();
     for package in order {
         let registry = registry_for(http, catalog, &package)?;
         let latest = registry.latest_version()?;
-        let selected = if roots.contains(package.as_str()) { requested.unwrap_or(&latest) } else { &latest };
+        let requested = requested_versions.get(&package).and_then(|version| version.as_deref());
+        let selected = requested.unwrap_or(&latest);
         let current = installed_version(&package);
-        if requested.is_none() || !roots.contains(package.as_str()) {
+        if requested.is_none() {
             if let Some(current) = &current {
                 if vercmp(selected, current)? <= 0 {
                     println!("{package} is already at {current}; cloud version is {selected}. No downgrade or reinstall.");
@@ -655,9 +749,27 @@ mod tests {
     }
 
     #[test]
-    fn ls_accepts_an_optional_package() {
-        let cli = Cli::try_parse_from(["cpkg", "ls", "clavis-shell"]).unwrap();
-        assert!(matches!(cli.command, Commands::List { package: Some(name) } if name == "clavis-shell"));
+    fn pacman_style_info_action_accepts_targets() {
+        let args = [OsString::from("-Si"), OsString::from("clavis-shell")];
+        assert!(matches!(pacman_action(&args).unwrap(), PacmanAction::Info(names) if names == vec!["clavis-shell".to_owned()]));
+    }
+
+    #[test]
+    fn pacman_operation_flags_select_cloud_actions() {
+        let install = [OsString::from("-S"), OsString::from("clavis-shell")];
+        assert!(matches!(pacman_action(&install).unwrap(), PacmanAction::Install(_, _)));
+        let upgrade = [OsString::from("-Syu"), OsString::from("--noconfirm")];
+        assert!(matches!(pacman_action(&upgrade).unwrap(), PacmanAction::Upgrade(args) if args == vec![OsString::from("--noconfirm")]));
+        let check = [OsString::from("-Qu")];
+        assert!(matches!(pacman_action(&check).unwrap(), PacmanAction::Check(names) if names.is_empty()));
+    }
+
+    #[test]
+    fn non_cloud_commands_are_rejected() {
+        let subcommand = [OsString::from("install"), OsString::from("clavis-shell")];
+        assert!(pacman_action(&subcommand).is_err());
+        let removal = [OsString::from("-Rns"), OsString::from("key-cli")];
+        assert!(pacman_action(&removal).is_err());
     }
 
     #[test]
@@ -681,19 +793,19 @@ mod tests {
     }
 
     #[test]
-    fn package_shorthand_preserves_pacman_arguments_after_separator() {
+    fn pacman_install_parses_package_equals_version_and_options() {
         let args = [
-            OsString::from("clavis-shell"),
-            OsString::from("--"),
+            OsString::from("-S"),
+            OsString::from("clavis-shell=1.2.3-1"),
+            OsString::from("key-cli"),
             OsString::from("--noconfirm"),
-            OsString::from("--color=always"),
         ];
-        let (packages, forwarded) = cloud_shorthand(&args).unwrap().unwrap();
-        assert_eq!(packages, vec!["clavis-shell".to_owned()]);
-        assert_eq!(
-            forwarded,
-            vec![OsString::from("--noconfirm"), OsString::from("--color=always")]
-        );
+        let (targets, forwarded) = parse_install_args(&args).unwrap();
+        assert_eq!(targets, vec![
+            ("clavis-shell".to_owned(), Some("1.2.3-1".to_owned())),
+            ("key-cli".to_owned(), None),
+        ]);
+        assert_eq!(forwarded, vec![OsString::from("--noconfirm")]);
     }
 
     #[test]

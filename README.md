@@ -37,7 +37,7 @@ dux-files 是官方预编译二进制重打包（UI 已内嵌，单文件），�
 
 ### Clavis Shell 安装
 
-Clavis 需要同时安装 `clavis-shell`、`libcava`、`qt6-m3shapes-git` 与 `key-cli` 四个包。CI 为三个依赖建立独立构建 job 与 artifact；构建 clavis-shell 时下载并安装它们，不重复编译。手动安装时，将四个 artifact 中的 .pacman 文件放在同一目录后运行 `sudo pacman -U *.pacman`；使用三期客户端时运行 `cpkg clavis-shell`，客户端会自动解析并安装另外三个依赖。CI 每次从两个上游仓库的 main 获取 Clavis/key-cli 源码，对 clavis-shell 先应用 `pkgs/clavis-shell/patches/` 下的本地补丁，再通过上游 release.py 按构建日期生成版本并云端编译。key-cli artifact 只含 CLI 本体，不含键盘/CPU 特权授权包；桌面机不运行 makepkg。
+Clavis 需要同时安装 `clavis-shell`、`libcava`、`qt6-m3shapes-git` 与 `key-cli` 四个包。CI 为三个依赖建立独立构建 job 与 artifact；构建 clavis-shell 时下载并安装它们，不重复编译。手动安装时，将四个 artifact 中的 .pacman 文件放在同一目录后运行 `sudo pacman -U *.pacman`；使用 cpkg 时运行 `cpkg -S clavis-shell`，客户端会自动解析并安装另外三个依赖。CI 每次从两个上游仓库的 main 获取 Clavis/key-cli 源码，对 clavis-shell 先应用 `pkgs/clavis-shell/patches/` 下的本地补丁，再通过上游 release.py 按构建日期生成版本并云端编译。key-cli artifact 只含 CLI 本体，不含键盘/CPU 特权授权包；桌面机不运行 makepkg。
 
 **当前本地补丁**（每个均为上游未修复时的临时 workaround，含背景、触发条件与移除方法，见 [`pkgs/clavis-shell/patches/README.md`](pkgs/clavis-shell/patches/README.md)）：
 
@@ -170,36 +170,29 @@ git add && git commit && git push   # 自动触发构建
 
 ## cpkg 使用说明
 
-`cpkg` 是 GHCR 云端包客户端。可用包及上游信息见[包清单](PACKAGES.md)，客户端清单和云端依赖关系见 [`cpkg/packages.json`](cpkg/packages.json)。CI 会执行格式检查、单元测试、Clippy 和 release 构建，并上传 30 天有效的 x86_64 二进制 artifact。
+`cpkg` 是 GHCR 云端包客户端，命令格式统一采用 pacman 的选项语法，不提供 `ls`、`install` 等子命令或包名简写。可用包及上游信息见[包清单](PACKAGES.md)，客户端清单和云端依赖关系见 [`cpkg/packages.json`](cpkg/packages.json)。CI 会执行格式检查、单元测试、Clippy 和 release 构建，并上传 30 天有效的 x86_64 二进制 artifact。
 
 ### 命令
 
 | 命令 | 用途 |
 |------|------|
-| `cpkg ls` | 列出可用云端包及最新版本 |
-| `cpkg ls <包>` | 查看包详情和 OCI 摘要信息 |
-| `cpkg -Ss <正则>` | 按包名或简介搜索，支持正则；也可写 `cpkg --sync --search <正则>` |
-| `cpkg check [包]` | 检查已安装云端包是否有更新；不指定包时检查全部 |
-| `cpkg <包>` | 安装或升级云端包，并递归补齐云端依赖 |
-| `cpkg install <包...>` | 安装指定云端包及其云端依赖 |
-| `cpkg upgrade`、`cpkg -Syu` | 升级所有已安装且有新版本的云端包 |
+| `cpkg -Sl` | 列出可用云端包及最新版本 |
+| `cpkg -Si <包>` | 查看包详情和 OCI 摘要信息 |
+| `cpkg -Ss <正则>` | 按包名或简介搜索，支持正则 |
+| `cpkg -Qu [包]` | 检查已安装云端包是否有更新；不指定包时检查全部 |
+| `cpkg -S <包...>` | 安装指定云端包及其云端依赖 |
+| `cpkg -S <包>=<版本>` | 安装指定版本 |
+| `cpkg -Syu` | 升级所有已安装且有新版本的云端包 |
 
-`cpkg -Syu` 使用 pacman 熟悉的 sync/refresh/sysupgrade 操作语法，但只处理 cpkg 管理的 GHCR 包，不运行 pacman 仓库升级。长选项形式为 `cpkg --sync --refresh --sysupgrade`。
-
-指定版本：
+`cpkg -Syu` 使用 pacman 的 sync/refresh/sysupgrade 操作语法，但只处理 cpkg 管理的 GHCR 包，不运行 pacman 仓库升级。长选项形式为 `cpkg --sync --refresh --sysupgrade`。其他 pacman 选项可直接放在命令中，例如：
 
 ```sh
-cpkg install <包> --version <版本>
-```
-
-向云端安装事务传递 pacman 选项时，将它们放在 `--` 后：
-
-```sh
-cpkg install clavis-shell -- --noconfirm
+cpkg -S clavis-shell key-cli --noconfirm
+cpkg -S clavis-shell=1.2.3-1 --noconfirm
 cpkg -Syu --noconfirm
 ```
 
-以 pacman 选项开头的其他命令（例如 `cpkg -Rns key-cli`）会将参数原样传给 pacman，不添加、删除或改写参数。云端包安装会下载 OCI layer、校验 SHA-256 后调用 `pacman -U`；官方仓库依赖仍由 pacman 处理。Clavis 的云端依赖为 `key-cli`、`libcava` 和 `qt6-m3shapes-git`，使用 `cpkg clavis-shell` 会自动安装依赖。
+以其他 pacman 操作进行的本地查询、移除等操作直接运行 pacman，例如 `sudo pacman -Rns key-cli`；cpkg 不处理也不透传这些命令。云端包安装会下载 OCI layer、校验 SHA-256 后调用 `pacman -U`；官方仓库依赖仍由 pacman 处理。Clavis 的云端依赖为 `key-cli`、`libcava` 和 `qt6-m3shapes-git`，使用 `cpkg -S clavis-shell` 会自动安装依赖。
 
 `cpkg` 不使用 `repo-add` 或 `cloud.db`。OCI 元数据查询只读取 manifest，不下载包文件。卸载行为由用户选择的 pacman 选项决定；例如 `-Rns` 会递归移除不再需要的依赖并删除 `.pacsave` 配置文件。新建 GHCR package 后需将 visibility 设为 public，客户端才能匿名查询和下载。同一版本 tag 不允许覆盖，重打包时需先更新 pkgrel。
 
