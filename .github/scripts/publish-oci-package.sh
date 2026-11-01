@@ -88,15 +88,22 @@ upload_blob() {
     [[ "$post_status" == 202 ]] || { echo "::error::Blob upload session failed (HTTP $post_status)"; cat "$workdir/upload.json"; return 1; }
     location="$(awk 'BEGIN { IGNORECASE=1 } /^Location:/ { sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); value=$0 } END { print value }' "$headers")"
     [[ -n "$location" ]] || { echo "::error::Registry omitted upload Location"; return 1; }
+    safe_location="${location%%\?*}"
+    echo "Registry upload Location: $safe_location"
     if [[ "$location" == https://* ]]; then
-        [[ "$location" == "$registry/v2/$repository/blobs/uploads/"* ]] || {
-            echo "::error::Registry returned an upload URL outside the expected GHCR repository"
+        [[ "$location" == "$registry/"* ]] || {
+            echo "::error::Registry returned an upload URL outside GHCR: $safe_location"
+            return 1
+        }
+        location_path="${location#https://ghcr.io}"
+        [[ "$location_path" == "/v2/$repository/blobs/uploads/"* ]] || {
+            echo "::error::Registry returned an upload URL outside the expected repository: $safe_location"
             return 1
         }
     elif [[ "$location" == /v2/$repository/blobs/uploads/* ]]; then
         location="$registry$location"
     else
-        echo "::error::Registry returned an unexpected upload Location"
+        echo "::error::Registry returned an unexpected upload Location: $safe_location"
         return 1
     fi
     separator='?'

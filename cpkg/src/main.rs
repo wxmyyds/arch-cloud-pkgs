@@ -83,6 +83,7 @@ struct Descriptor {
 #[derive(Debug, Deserialize)]
 struct Manifest {
     annotations: std::collections::HashMap<String, String>,
+    layers: Vec<Descriptor>,
 }
 
 #[derive(Debug, Clone)]
