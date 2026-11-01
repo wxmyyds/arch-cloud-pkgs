@@ -598,7 +598,7 @@ mod tests {
     fn search_matches_package_name_and_description_case_insensitively() {
         let package = CatalogPackage {
             name: "clavis-shell".to_owned(),
-            description: "Clavis QML/Qt6 shell".to_owned(),
+            description: "Clavis qml/Qt6 shell".to_owned(),
             depends: Vec::new(),
         };
         let pattern = RegexBuilder::new("CLAVIS").case_insensitive(true).build().unwrap();
