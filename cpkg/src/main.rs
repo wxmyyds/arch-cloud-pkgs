@@ -1,3 +1,5 @@
+mod i18n;
+
 use anyhow::{Context, Result, bail, ensure};
 use reqwest::blocking::{Client as HttpClient, Response};
 use reqwest::header::{ACCEPT, AUTHORIZATION, LINK};
@@ -17,6 +19,15 @@ const CATALOG_URL: &str = "https://raw.githubusercontent.com/wxmyyds/arch-cloud-
 const MANIFEST_ACCEPT: &str = "application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json";
 const PKGINFO_ANNOTATION: &str = "org.wxmyyds.cpkg.pkginfo";
 const LAYER_MEDIA_TYPE: &str = "application/vnd.wxmyyds.cpkg.pkg.v1";
+
+macro_rules! tr {
+    ($key:ident) => {
+        i18n::text(i18n::Key::$key)
+    };
+    ($key:ident, $($name:ident = $value:expr),+ $(,)?) => {
+        i18n::format(i18n::Key::$key, &[$((stringify!($name), format!("{}", $value))),+])
+    };
+}
 
 #[derive(Debug)]
 enum PacmanAction {
@@ -94,13 +105,13 @@ impl Catalog {
         let embedded: Self = serde_json::from_str(include_str!("../packages.json"))?;
         let fetched = http.get(CATALOG_URL).send().and_then(Response::error_for_status);
         let catalog = match fetched {
-            Ok(response) => response.json::<Self>().context("decode package catalog")?,
+            Ok(response) => response.json::<Self>().context(tr!(CatalogParseFailed))?,
             Err(_) => embedded,
         };
-        ensure!(catalog.schema_version == 1, "unsupported package catalog version");
-        ensure!(!catalog.packages.is_empty(), "package catalog is empty");
+        ensure!(catalog.schema_version == 1, "{}", tr!(CatalogVersionUnsupported, version = catalog.schema_version));
+        ensure!(!catalog.packages.is_empty(), "{}", tr!(CatalogEmpty));
         for package in &catalog.packages {
-            ensure!(valid_package_name(&package.name), "invalid package name in catalog: {}", package.name);
+            ensure!(valid_package_name(&package.name), "{}", tr!(CatalogInvalidPackageName, name = package.name));
         }
         Ok(catalog)
     }
@@ -109,7 +120,7 @@ impl Catalog {
         self.packages
             .iter()
             .find(|package| package.name == name)
-            .with_context(|| format!("package '{name}' is not in the cpkg catalog"))
+            .with_context(|| tr!(PackageNotFound, name = name))
     }
 }
 
@@ -123,7 +134,7 @@ impl RegistryClient {
             .send()?
             .error_for_status()?
             .json::<TokenResponse>()
-            .context("decode GHCR anonymous token")?;
+            .context(tr!(GhcrTokenFailed))?;
         Ok(Self { http, repository, token: response.token })
     }
 
@@ -137,15 +148,15 @@ impl RegistryClient {
         let mut visited = HashSet::new();
         let mut tags = Vec::new();
         while let Some(url) = next.take() {
-            ensure!(visited.insert(url.clone()), "GHCR returned a repeated tags pagination link");
+            ensure!(visited.insert(url.clone()), "{}", tr!(GhcrRepeatedPagination));
             let response = self.auth(self.http.get(&url)).send()?.error_for_status()?;
             let link = response.headers().get(LINK).and_then(|value| value.to_str().ok()).map(str::to_owned);
-            let page: TagsResponse = response.json().context("decode GHCR tag list")?;
+            let page: TagsResponse = response.json().context(tr!(GhcrTagsFailed))?;
             tags.extend(page.tags.unwrap_or_default());
             next = match link.as_deref().and_then(next_link) {
                 Some(link) if link.starts_with("/v2/") => Some(format!("{REGISTRY}{link}")),
                 Some(link) if link.starts_with("https://ghcr.io/v2/") => Some(link.to_owned()),
-                Some(_) => bail!("GHCR returned an unexpected pagination URL"),
+                Some(_) => bail!("{}", tr!(GhcrUnexpectedPagination)),
                 None => None,
             };
         }
@@ -154,7 +165,7 @@ impl RegistryClient {
 
     fn latest_version(&self) -> Result<String> {
         let mut versions = self.tags()?.into_iter().filter_map(decode_tag);
-        let mut latest = versions.next().context("no published versions found")?;
+        let mut latest = versions.next().context(tr!(GhcrNoVersions))?;
         for candidate in versions {
             if vercmp(&candidate, &latest)? > 0 {
                 latest = candidate;
@@ -168,20 +179,20 @@ impl RegistryClient {
         let url = format!("{REGISTRY}/v2/{}/manifests/{tag}", self.repository);
         let response = self.auth(self.http.get(url)).header(ACCEPT, MANIFEST_ACCEPT).send()?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
-            bail!("version {version} was not found in GHCR");
+            bail!("{}", tr!(GhcrVersionNotFound, version = version));
         }
-        let manifest: Manifest = response.error_for_status()?.json().context("decode OCI manifest")?;
-        let pkginfo = manifest.annotations.get(PKGINFO_ANNOTATION).context("OCI manifest has no .PKGINFO annotation")?.clone();
-        let name = pkginfo_field(&pkginfo, "pkgname").context(".PKGINFO has no pkgname")?;
-        let version_from_pkginfo = pkginfo_field(&pkginfo, "pkgver").context(".PKGINFO has no pkgver")?;
-        let architecture = pkginfo_field(&pkginfo, "arch").context(".PKGINFO has no arch")?;
+        let manifest: Manifest = response.error_for_status()?.json().context(tr!(OciManifestFailed))?;
+        let pkginfo = manifest.annotations.get(PKGINFO_ANNOTATION).context(tr!(OciPkginfoMissing))?.clone();
+        let name = pkginfo_field(&pkginfo, "pkgname").context(tr!(PkgNameMissing))?;
+        let version_from_pkginfo = pkginfo_field(&pkginfo, "pkgver").context(tr!(PkgVersionMissing))?;
+        let architecture = pkginfo_field(&pkginfo, "arch").context(tr!(PkgArchitectureMissing))?;
         let description = pkginfo_field(&pkginfo, "pkgdesc").unwrap_or_default();
-        ensure!(name == expected_name, "manifest package name mismatch: expected {expected_name}, got {name}");
-        ensure!(version_from_pkginfo == version, "manifest version mismatch: tag is {version}, .PKGINFO says {version_from_pkginfo}");
-        ensure!(architecture == "any" || architecture == std::env::consts::ARCH, "package architecture {architecture} does not match this machine");
-        ensure!(manifest.layers.len() == 1, "expected one pacman package layer");
+        ensure!(name == expected_name, "{}", tr!(PkgNameMismatch, expected = expected_name, actual = name));
+        ensure!(version_from_pkginfo == version, "{}", tr!(PkgVersionMismatch, tag = version, metadata = version_from_pkginfo));
+        ensure!(architecture == "any" || architecture == std::env::consts::ARCH, "{}", tr!(PkgArchitectureMismatch, architecture = architecture));
+        ensure!(manifest.layers.len() == 1, "{}", tr!(OciLayerCount));
         let descriptor = &manifest.layers[0];
-        ensure!(descriptor.media_type == LAYER_MEDIA_TYPE, "unexpected package layer media type");
+        ensure!(descriptor.media_type == LAYER_MEDIA_TYPE, "{}", tr!(OciLayerType));
         validate_digest(&descriptor.digest)?;
         Ok(PackageMetadata {
             name,
@@ -196,26 +207,26 @@ impl RegistryClient {
     fn download(&self, metadata: &PackageMetadata, directory: &Path) -> Result<PathBuf> {
         let url = format!("{REGISTRY}/v2/{}/blobs/{}", self.repository, metadata.layer.digest);
         let response = self.auth(self.http.get(url)).send()?.error_for_status()?;
-        let digest_hex = metadata.layer.digest.strip_prefix("sha256:").context("malformed package digest")?;
+        let digest_hex = metadata.layer.digest.strip_prefix("sha256:").context(tr!(DownloadDigestMalformed))?;
         let filename = format!("{}-{digest_hex}.pacman", metadata.name);
         let path = directory.join(filename);
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)
-            .context("create package download file")?;
+            .context(tr!(DownloadFileCreateFailed))?;
         let mut response = response;
         let mut hasher = Sha256::new();
         let mut buffer = [0u8; 128 * 1024];
         let mut copied = 0u64;
         loop {
-            let count = response.read(&mut buffer).context("download package blob")?;
+            let count = response.read(&mut buffer).context(tr!(DownloadBlobReadFailed))?;
             if count == 0 { break; }
             file.write_all(&buffer[..count])?;
             hasher.update(&buffer[..count]);
             copied += count as u64;
         }
         file.flush()?;
-        ensure!(copied == metadata.layer.size, "package size mismatch: expected {}, got {copied}", metadata.layer.size);
+        ensure!(copied == metadata.layer.size, "{}", tr!(DownloadSizeMismatch, expected = metadata.layer.size, actual = copied));
         let actual_digest = format!("sha256:{:x}", hasher.finalize());
-        ensure!(actual_digest == metadata.layer.digest, "package SHA-256 mismatch");
+        ensure!(actual_digest == metadata.layer.digest, "{}", tr!(DownloadDigestMismatch));
         Ok(path)
     }
 }
@@ -236,7 +247,7 @@ fn valid_package_name(name: &str) -> bool {
 }
 
 fn encode_tag(version: &str) -> Result<String> {
-    ensure!(!version.is_empty(), "empty package version");
+    ensure!(!version.is_empty(), "{}", tr!(VersionEmpty));
     let mut tag = String::from("v");
     for byte in version.bytes() {
         if byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-' {
@@ -246,7 +257,7 @@ fn encode_tag(version: &str) -> Result<String> {
             tag.push_str(&format!("{byte:02X}"));
         }
     }
-    ensure!(tag.len() <= 128, "encoded package version exceeds OCI tag length limit");
+    ensure!(tag.len() <= 128, "{}", tr!(VersionTagTooLong));
     Ok(tag)
 }
 
@@ -276,16 +287,16 @@ fn pkginfo_field(pkginfo: &str, key: &str) -> Option<String> {
 }
 
 fn validate_digest(digest: &str) -> Result<()> {
-    let hex = digest.strip_prefix("sha256:").context("only sha256 OCI digests are supported")?;
-    ensure!(hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()), "malformed SHA-256 digest");
+    let hex = digest.strip_prefix("sha256:").context(tr!(DigestUnsupported))?;
+    ensure!(hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()), "{}", tr!(DigestMalformed));
     Ok(())
 }
 
 fn vercmp(left: &str, right: &str) -> Result<i8> {
-    let output = Command::new("vercmp").arg(left).arg(right).output().context("run vercmp (install pacman)")?;
-    ensure!(output.status.success(), "vercmp rejected a version comparison");
+    let output = Command::new("vercmp").arg(left).arg(right).output().context(tr!(VercmpRunFailed))?;
+    ensure!(output.status.success(), "{}", tr!(VercmpCompareFailed));
     let value = String::from_utf8_lossy(&output.stdout).trim().parse::<i8>()?;
-    ensure!((-1..=1).contains(&value), "unexpected vercmp output: {value}");
+    ensure!((-1..=1).contains(&value), "{}", tr!(VercmpUnexpectedOutput, value = value));
     Ok(value)
 }
 
@@ -349,11 +360,11 @@ fn parse_search_args(args: &[OsString]) -> Result<Option<String>> {
 
     let query = match values[0] {
         "-Ss" | "-sS" => {
-            ensure!(values.len() == 2, "usage: cpkg -Ss <pattern>");
+            ensure!(values.len() == 2, "{}", tr!(SearchShortUsage));
             Some(values[1])
         }
         "-S" | "--sync" if values.len() >= 2 && matches!(values[1], "-s" | "--search") => {
-            ensure!(values.len() == 3, "usage: cpkg --sync --search <pattern>");
+            ensure!(values.len() == 3, "{}", tr!(SearchLongUsage));
             Some(values[2])
         }
         "-S" | "--sync" if values.len() == 2 && values[1].starts_with("--search=") => {
@@ -369,19 +380,19 @@ fn search_matches(package: &CatalogPackage, pattern: &Regex) -> bool {
 }
 
 fn search_packages(http: &HttpClient, catalog: &Catalog, query: &str) -> Result<()> {
-    let pattern = RegexBuilder::new(query).case_insensitive(true).build().context("invalid package search pattern")?;
+    let pattern = RegexBuilder::new(query).case_insensitive(true).build().context(tr!(SearchPatternInvalid))?;
     let matches: Vec<&CatalogPackage> = catalog.packages.iter().filter(|package| search_matches(package, &pattern)).collect();
     if matches.is_empty() {
-        println!("No packages found matching '{query}'.");
+        println!("{}", tr!(SearchNoMatches, query = query));
         return Ok(());
     }
     for package in matches {
         match registry_for(http, catalog, &package.name).and_then(|registry| registry.latest_version()) {
             Ok(version) => {
                 println!("ghcr.io/{OWNER}/{} {}", package.name, version);
-                println!("    {}", package.description);
+                println!("{}: {}", tr!(SearchDescription), package.description);
             }
-            Err(error) => println!("ghcr.io/{:<20} unavailable ({error})", package.name),
+            Err(error) => println!("ghcr.io/{:<20} {} ({error})", package.name, tr!(SearchUnavailable)),
         }
     }
     Ok(())
@@ -402,9 +413,9 @@ fn is_sync_info(args: &[OsString]) -> bool {
 fn parse_info_targets(args: &[OsString]) -> Result<Vec<String>> {
     let start = if args.first().and_then(|arg| arg.to_str()) == Some("--sync") { 2 } else { 1 };
     let targets = args[start..].iter()
-        .map(|arg| arg.to_str().context("package names must be valid UTF-8").map(str::to_owned))
+        .map(|arg| arg.to_str().context(tr!(InvalidUtf8PackageName)).map(str::to_owned))
         .collect::<Result<Vec<_>>>()?;
-    ensure!(!targets.is_empty(), "usage: cpkg -Si <package>");
+    ensure!(!targets.is_empty(), "{}", tr!(InfoUsage));
     Ok(targets)
 }
 
@@ -423,7 +434,7 @@ fn pacman_option_takes_value(option: &str) -> bool {
 }
 
 fn parse_install_args(args: &[OsString]) -> Result<(Vec<(String, Option<String>)>, Vec<OsString>)> {
-    let first = args.first().and_then(|arg| arg.to_str()).context("missing pacman operation")?;
+    let first = args.first().and_then(|arg| arg.to_str()).context(tr!(OperationMissing))?;
     let mut pacman_args = Vec::new();
     let mut targets = Vec::new();
     let mut options_ended = false;
@@ -474,25 +485,25 @@ fn parse_install_args(args: &[OsString]) -> Result<(Vec<(String, Option<String>)
             }
         }
     }
-    ensure!(!expect_option_value, "missing value for pacman option");
-    ensure!(!targets.is_empty(), "usage: cpkg -S <package[=version]...>");
+    ensure!(!expect_option_value, "{}", tr!(OptionValueMissing));
+    ensure!(!targets.is_empty(), "{}", tr!(InstallUsage));
     Ok((targets, pacman_args))
 }
 
 fn parse_package_target(target: &str) -> Result<(String, Option<String>)> {
     let (name, version) = match target.split_once('=') {
         Some((name, version)) => {
-            ensure!(!version.is_empty(), "package version cannot be empty: {target}");
+            ensure!(!version.is_empty(), "{}", tr!(InstallVersionEmpty, target = target));
             (name, Some(version.to_owned()))
         }
         None => (target, None),
     };
-    ensure!(valid_package_name(name), "invalid package target: {target}");
+    ensure!(valid_package_name(name), "{}", tr!(InstallTargetInvalid, target = target));
     Ok((name.to_owned(), version))
 }
 
 fn pacman_action(args: &[OsString]) -> Result<PacmanAction> {
-    let first = args.first().and_then(|arg| arg.to_str()).context("usage: cpkg <pacman operation>")?;
+    let first = args.first().and_then(|arg| arg.to_str()).context(tr!(OperationMissing))?;
     if let Some(query) = parse_search_args(args)? {
         return Ok(PacmanAction::Search(query));
     }
@@ -501,7 +512,7 @@ fn pacman_action(args: &[OsString]) -> Result<PacmanAction> {
     if is_query_upgrades(args) {
         let start = if first == "--query" { 2 } else { 1 };
         let packages = args[start..].iter()
-            .map(|arg| arg.to_str().context("package names must be valid UTF-8").map(str::to_owned))
+            .map(|arg| arg.to_str().context(tr!(InvalidUtf8PackageName)).map(str::to_owned))
             .collect::<Result<Vec<_>>>()?;
         return Ok(PacmanAction::Check(packages));
     }
@@ -513,9 +524,9 @@ fn pacman_action(args: &[OsString]) -> Result<PacmanAction> {
         return Ok(PacmanAction::Install(targets, pacman_args));
     }
     if first.starts_with('-') {
-        bail!("cpkg only handles cloud package operations; use pacman directly for removal and other local operations")
+        bail!("{}", tr!(LocalOperationUnsupported))
     }
-    bail!("only pacman-style cloud operations are supported; see 'cpkg --help'")
+    bail!("{}", tr!(CloudOperationUnsupported))
 }
 
 fn catalog_package<'a>(catalog: &'a Catalog, name: &str) -> Result<&'a CatalogPackage> {
@@ -527,15 +538,15 @@ fn registry_for(http: &HttpClient, catalog: &Catalog, name: &str) -> Result<Regi
 }
 
 fn print_help() {
-    println!("cpkg {} - GHCR cloud package client", env!("CARGO_PKG_VERSION"));
-    println!("\nPacman-style operations:");
-    println!("  cpkg -Sl                         List cloud packages");
-    println!("  cpkg -Si <package>               Show package information");
-    println!("  cpkg -Ss <pattern>               Search package names and descriptions");
-    println!("  cpkg -Qu [package]               Check cloud package updates");
-    println!("  cpkg -S <package[=version]...>  Install cloud packages");
-    println!("  cpkg -Syu [options]              Upgrade installed cloud packages");
-    println!("\nFor removal and other local package operations, run pacman directly.");
+    println!("{}", tr!(HelpTitle, version = env!("CARGO_PKG_VERSION")));
+    println!("\n{}", tr!(HelpOperations));
+    println!("{}", tr!(HelpList));
+    println!("{}", tr!(HelpInfo));
+    println!("{}", tr!(HelpSearch));
+    println!("{}", tr!(HelpCheck));
+    println!("{}", tr!(HelpInstall));
+    println!("{}", tr!(HelpUpgrade));
+    println!("\n{}", tr!(HelpLocalOperations));
 }
 
 fn run() -> Result<()> {
@@ -545,7 +556,7 @@ fn run() -> Result<()> {
         return Ok(());
     }
     if args.first().and_then(|arg| arg.to_str()) == Some("--version") {
-        println!("cpkg {}", env!("CARGO_PKG_VERSION"));
+        println!("{}", tr!(VersionTitle, version = env!("CARGO_PKG_VERSION")));
         return Ok(());
     }
 
@@ -554,10 +565,11 @@ fn run() -> Result<()> {
     let catalog = Catalog::load(&http)?;
     match action {
         PacmanAction::List => {
+            println!("{}", tr!(ListHeader));
             for package in &catalog.packages {
                 match registry_for(&http, &catalog, &package.name).and_then(|registry| registry.latest_version()) {
                     Ok(version) => println!("{:<20} {:<24} {}", package.name, version, package.description),
-                    Err(error) => println!("{:<20} unavailable ({error})", package.name),
+                    Err(error) => println!("{}", tr!(ListUnavailable, name = package.name, error = error)),
                 }
             }
         }
@@ -566,9 +578,11 @@ fn run() -> Result<()> {
                 let registry = registry_for(&http, &catalog, &package)?;
                 let selected = registry.latest_version()?;
                 let metadata = registry.metadata(&selected, &package)?;
-                println!("{} {} ({})", metadata.name, metadata.version, metadata.architecture);
-                println!("{}", metadata.description);
-                println!("OCI layer: {} bytes, {}", metadata.layer.size, metadata.layer.digest);
+                println!("{}", tr!(InfoName, name = metadata.name));
+                println!("{}", tr!(InfoVersion, version = metadata.version));
+                println!("{}", tr!(InfoArchitecture, architecture = metadata.architecture));
+                println!("{}", tr!(InfoDescription, description = metadata.description));
+                println!("{}", tr!(InfoLayer, size = metadata.layer.size, digest = metadata.layer.digest));
                 println!("\n{}", metadata.pkginfo);
             }
         }
@@ -592,12 +606,12 @@ fn check_updates(http: &HttpClient, catalog: &Catalog, names: &[String]) -> Resu
         let registry = registry_for(http, catalog, &package.name)?;
         let latest = registry.latest_version()?;
         match vercmp(&latest, &current)? {
-            1 => { println!("{}: {} -> {}", package.name, current, latest); updates += 1; }
-            0 => println!("{}: up to date ({current})", package.name),
-            _ => println!("{}: local {} is newer than cloud {} (no downgrade)", package.name, current, latest),
+            1 => { println!("{}", tr!(UpdateAvailable, name = package.name, current = current, latest = latest)); updates += 1; }
+            0 => println!("{}", tr!(UpdateCurrent, name = package.name, version = current)),
+            _ => println!("{}", tr!(UpdateLocalNewer, name = package.name, current = current, latest = latest)),
         }
     }
-    if updates == 0 { println!("No updates available."); }
+    if updates == 0 { println!("{}", tr!(UpdateNone)); }
     Ok(())
 }
 
@@ -611,7 +625,7 @@ fn dependency_order(catalog: &Catalog, roots: &[String]) -> Result<Vec<String>> 
         ordered: &mut Vec<String>,
     ) -> Result<()> {
         if visited.contains(package) { return Ok(()); }
-        ensure!(visiting.insert(package.to_owned()), "dependency cycle involving {package}");
+        ensure!(visiting.insert(package.to_owned()), "{}", tr!(DependencyCycle, package = package));
         let metadata = catalog.find(package)?;
         for dependency in &metadata.depends {
             visit(catalog, dependency, visiting, visited, ordered)?;
@@ -631,13 +645,30 @@ fn dependency_order(catalog: &Catalog, roots: &[String]) -> Result<Vec<String>> 
     Ok(ordered)
 }
 
+fn needs_cloud_confirmation(pacman_args: &[OsString]) -> bool {
+    !pacman_args.iter().any(|arg| arg == "--noconfirm")
+}
+
+fn confirm_cloud_transaction(package_count: usize, pacman_args: &[OsString]) -> Result<bool> {
+    if !needs_cloud_confirmation(pacman_args) { return Ok(true); }
+    print!("{}", tr!(ConfirmPrompt, count = package_count));
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes" | "是" | "确认") {
+        return Ok(true);
+    }
+    println!("{}", tr!(ConfirmCancelled));
+    Ok(false)
+}
+
 fn install_many(
     http: &HttpClient,
     catalog: &Catalog,
     targets: &[(String, Option<String>)],
     pacman_args: &[OsString],
 ) -> Result<()> {
-    ensure!(!targets.is_empty(), "specify at least one package to install");
+    ensure!(!targets.is_empty(), "{}", tr!(InstallNoPackages));
     let requested_versions: HashMap<String, Option<String>> = targets.iter().cloned().collect();
     let roots: Vec<String> = targets.iter().map(|(name, _)| name.clone()).collect();
     let order = dependency_order(catalog, &roots)?;
@@ -651,17 +682,18 @@ fn install_many(
         if requested.is_none() {
             if let Some(current) = &current {
                 if vercmp(selected, current)? <= 0 {
-                    println!("{package} is already at {current}; cloud version is {selected}. No downgrade or reinstall.");
+                    println!("{}", tr!(InstallAlreadyCurrent, name = package, current = current, latest = selected));
                     continue;
                 }
             }
         }
         let metadata = registry.metadata(selected, &package)?;
-        println!("Install {} {} ({})", metadata.name, metadata.version, metadata.architecture);
-        println!("Current: {}", current.as_deref().unwrap_or("not installed"));
+        println!("{}", tr!(InstallSelected, name = metadata.name, version = metadata.version, architecture = metadata.architecture));
+        println!("{}", tr!(InstallCurrentVersion, version = current.as_deref().unwrap_or(tr!(NotInstalled))));
         selected_packages.push(metadata);
     }
     if selected_packages.is_empty() { return Ok(()); }
+    if !confirm_cloud_transaction(selected_packages.len(), pacman_args)? { return Ok(()); }
     let temporary = tempdir()?;
     let mut paths = Vec::new();
     for metadata in &selected_packages {
@@ -681,10 +713,11 @@ fn upgrade(http: &HttpClient, catalog: &Catalog, pacman_args: &[OsString]) -> Re
             candidates.push((package.name.clone(), current, latest));
         }
     }
-    if candidates.is_empty() { println!("No updates available."); return Ok(()); }
+    if candidates.is_empty() { println!("{}", tr!(UpdateNone)); return Ok(()); }
     for (name, current, latest) in &candidates {
-        println!("{name}: {current} -> {latest}");
+        println!("{}", tr!(UpdateAvailable, name = name, current = current, latest = latest));
     }
+    if !confirm_cloud_transaction(candidates.len(), pacman_args)? { return Ok(()); }
     let temporary = tempdir()?;
     let mut paths = Vec::new();
     for (name, _, version) in &candidates {
@@ -696,17 +729,17 @@ fn upgrade(http: &HttpClient, catalog: &Catalog, pacman_args: &[OsString]) -> Re
 }
 
 fn run_pacman_upgrade(paths: &[PathBuf], pacman_args: &[OsString]) -> Result<()> {
-    ensure!(!paths.is_empty(), "no packages selected");
+    ensure!(!paths.is_empty(), "{}", tr!(TransactionNoPackages));
     let mut command = pacman_command();
     if !is_root() { command.arg("pacman"); }
     command.arg("-U").args(pacman_args).args(paths);
-    ensure!(command.status()?.success(), "pacman installation failed");
+    ensure!(command.status()?.success(), "{}", tr!(TransactionFailed));
     Ok(())
 }
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("cpkg: {error:#}");
+        eprintln!("{}: {error:#}", tr!(ErrorPrefix));
         std::process::exit(1);
     }
 }
@@ -714,6 +747,13 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_explicit_noconfirm_skips_cloud_confirmation() {
+        assert!(needs_cloud_confirmation(&[]));
+        assert!(!needs_cloud_confirmation(&[OsString::from("--noconfirm")]));
+        assert!(needs_cloud_confirmation(&[OsString::from("--color=always")]));
+    }
 
     #[test]
     fn pacman_sysupgrade_syntax_selects_cloud_upgrade() {

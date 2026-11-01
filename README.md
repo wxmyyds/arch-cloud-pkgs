@@ -170,7 +170,7 @@ git add && git commit && git push   # 自动触发构建
 
 ## cpkg 使用说明
 
-`cpkg` 是 GHCR 云端包客户端，命令格式统一采用 pacman 的选项语法，不提供 `ls`、`install` 等子命令或包名简写。可用包及上游信息见[包清单](PACKAGES.md)，客户端清单和云端依赖关系见 [`cpkg/packages.json`](cpkg/packages.json)。CI 会执行格式检查、单元测试、Clippy 和 release 构建，并上传 30 天有效的 x86_64 二进制 artifact。
+`cpkg` 是 GHCR 云端包客户端，命令格式统一采用 pacman 的选项语法，不提供 `ls`、`install` 等子命令或包名简写。界面语言按 `LC_ALL`、`LC_MESSAGES`、`LANG` 的优先级选择：简体中文 locale 显示中文，其他 locale 默认显示英文。可用包及上游信息见[包清单](PACKAGES.md)，客户端清单和云端依赖关系见 [`cpkg/packages.json`](cpkg/packages.json)。CI 会执行格式检查、单元测试、Clippy 和 release 构建，并上传 30 天有效的 x86_64 二进制 artifact。
 
 ### 命令
 
@@ -191,6 +191,8 @@ cpkg -S clavis-shell key-cli --noconfirm
 cpkg -S clavis-shell=1.2.3-1 --noconfirm
 cpkg -Syu --noconfirm
 ```
+
+下载包文件前 cpkg 会显示待处理包数并询问 `[y/N]`，默认取消；只有明确传入 `--noconfirm` 才跳过该确认。下载完成后 pacman 仍按自身设置确认安装事务。
 
 以其他 pacman 操作进行的本地查询、移除等操作直接运行 pacman，例如 `sudo pacman -Rns key-cli`；cpkg 不处理也不透传这些命令。云端包安装会下载 OCI layer、校验 SHA-256 后调用 `pacman -U`；官方仓库依赖仍由 pacman 处理。Clavis 的云端依赖为 `key-cli`、`libcava` 和 `qt6-m3shapes-git`，使用 `cpkg -S clavis-shell` 会自动安装依赖。
 
