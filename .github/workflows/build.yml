@@ -31,7 +31,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      pkgs: ${{ steps.select.outputs.json }}
+      pkgs: ${{ steps.select.outputs.pkgs }}
+      aux_pkgs: ${{ steps.select.outputs.aux_pkgs }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -72,7 +73,7 @@ jobs:
             fi
             CHANGED="$(git diff --name-only "$BEFORE" HEAD)"
             # 工作流或通用工具链变化可能影响所有 PKGBUILD，保守地全量重建。
-            if printf '%s\n' "$CHANGED" | grep -Eq '^\.github/workflows/build\.yml$|^\.github/scripts/prepare-toolchain\.sh$'; then
+            if printf '%s\n' "$CHANGED" | grep -Eq '^\.github/workflows/build\.yml$|^\.github/scripts/prepare-toolchain\.sh$|^\.github/scripts/publish-oci-package\.sh$'; then
               all_pkgs
               return
             fi
@@ -81,8 +82,8 @@ jobs:
               if printf '%s\n' "$CHANGED" | grep -Fxq '.github/scripts/prepare-upstream-source.sh'; then
                 printf '%s\n' clavis-shell key-cli
               fi
-              if printf '%s\n' "$CHANGED" | grep -Fxq '.github/scripts/build-clavis-aur-deps.sh'; then
-                printf '%s\n' clavis-shell
+              if printf '%s\n' "$CHANGED" | grep -Fxq '.github/scripts/build-aur-package.sh'; then
+                printf '%s\n' clavis-shell libcava qt6-m3shapes-git
               fi
             } | sort -u | while IFS= read -r n; do
               if [ -d "pkgs/$n" ]; then
@@ -104,20 +105,121 @@ jobs:
               exit 1
             fi
           done
-          if [ ${#names[@]} -eq 0 ]; then
-            echo "json=[]" >> "$GITHUB_OUTPUT"
-            echo "本次无包需要构建（仅 workflow/非包文件变更）"
-          else
-            echo "json=$(printf '%s\n' "${names[@]}" | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
-            echo "本次构建: ${names[*]}"
+          build_pkgs=()
+          aux_pkgs=()
+          for n in "${names[@]}"; do
+            case "$n" in
+              key-cli|libcava|qt6-m3shapes-git) aux_pkgs+=("$n") ;;
+              *) build_pkgs+=("$n") ;;
+            esac
+          done
+          if printf '%s\n' "${build_pkgs[@]}" | grep -Fxq clavis-shell; then
+            aux_pkgs+=(key-cli libcava qt6-m3shapes-git)
           fi
+          if [ "${#aux_pkgs[@]}" -gt 0 ]; then
+            mapfile -t aux_pkgs < <(printf '%s\n' "${aux_pkgs[@]}" | sort -u)
+          fi
+          json_array() {
+            if [ "$#" -eq 0 ]; then
+              printf '[]'
+            else
+              printf '%s\n' "$@" | jq -R . | jq -sc .
+            fi
+          }
+          build_json="$(json_array "${build_pkgs[@]}")"
+          aux_json="$(json_array "${aux_pkgs[@]}")"
+          echo "pkgs=$build_json" >> "$GITHUB_OUTPUT"
+          echo "aux_pkgs=$aux_json" >> "$GITHUB_OUTPUT"
+          echo "常规构建: ${build_pkgs[*]:-(无)}"
+          echo "独立依赖构建: ${aux_pkgs[*]:-(无)}"
 
-  # ---- build job：每个包一个独立 job 并行构建，互不干扰，单包失败不影响其他包
-  build:
+  # AUR 运行库与 key-cli 独立构建、发布；Clavis job 下载这些产物后再构建。
+  build-aux:
     needs: select
-    if: needs.select.outputs.pkgs != '[]'
+    if: needs.select.outputs.aux_pkgs != '[]'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    container:
+      image: archlinux:base-devel
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg: ${{ fromJSON(needs.select.outputs.aux_pkgs) }}
+    env:
+      PKG: ${{ matrix.pkg }}
+    steps:
+      - name: 创建构建用户
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: 同步系统并安装 AUR 构建工具
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Syu --needed --noconfirm
+          pacman -S --needed --noconfirm git curl jq namcap
+
+      - name: 构建独立包 ${{ matrix.pkg }}
+        run: |
+          set -euo pipefail
+          d="pkgs/$PKG"
+          if [ "$PKG" = key-cli ]; then
+            bash .github/scripts/prepare-toolchain.sh "$d"
+            bash .github/scripts/prepare-upstream-source.sh StatIndet/key-cli key-cli "$d"
+            runtime_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/key-cli-xdg.XXXXXX")"
+            chmod 700 "$runtime_dir"
+            chown builder:builder "$runtime_dir"
+            trap 'rm -rf -- "$runtime_dir"' EXIT
+            (cd "$d" && sudo -u builder env XDG_RUNTIME_DIR="$runtime_dir" makepkg -sf --noconfirm)
+            rm -f "$d"/*-debug-*.pkg.tar.zst "$d"/key-cli-keyboard-access-*.pkg.tar.zst "$d"/key-cli-cpu-power-access-*.pkg.tar.zst
+            shopt -s nullglob
+            files=("$d"/key-cli-*.pkg.tar.zst)
+          else
+            bash .github/scripts/build-aur-package.sh "$PKG" "$d"
+            shopt -s nullglob
+            files=("$d"/*.pkg.tar.zst)
+          fi
+          if [ "${#files[@]}" -ne 1 ]; then
+            echo "::error::预期一个 $PKG 包，实际 ${#files[@]} 个"
+            exit 1
+          fi
+          mv "${files[0]}" "${files[0]%.pkg.tar.zst}.pacman"
+          pacman -Qip "$d"/*.pacman
+          namcap "$d"/*.pacman
+
+      - name: 上传独立依赖包产物
+        uses: actions/upload-artifact@v5
+        with:
+          name: arch-packages-${{ matrix.pkg }}
+          path: pkgs/${{ matrix.pkg }}/*.pacman
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: 发布独立依赖到 GHCR OCI
+        env:
+          PACKAGE_NAME: ${{ matrix.pkg }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PACKAGE_FILE="pkgs/$PACKAGE_NAME/$(basename pkgs/$PACKAGE_NAME/*.pacman)" \
+            bash .github/scripts/publish-oci-package.sh
+
+  # 常规包独立 matrix；clavis-shell 依赖上方 key-cli/AUR 产物。
+  build:
+    needs: [select, build-aux]
+    if: always() && needs.select.result == 'success' && needs.select.outputs.pkgs != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
     container:
       image: archlinux:base-devel
     strategy:
@@ -147,7 +249,37 @@ jobs:
           # （makepkg -s 需要最新 DB）
           pacman -Syu --needed --noconfirm
 
-      # 读取包声明（build.conf + PKGBUILD），供缓存 key、上传路径和质量检查使用。
+      - uses: actions/download-artifact@v5
+        if: matrix.pkg == 'clavis-shell'
+        with:
+          name: arch-packages-key-cli
+          path: aux-deps/key-cli
+
+      - uses: actions/download-artifact@v5
+        if: matrix.pkg == 'clavis-shell'
+        with:
+          name: arch-packages-libcava
+          path: aux-deps/libcava
+
+      - uses: actions/download-artifact@v5
+        if: matrix.pkg == 'clavis-shell'
+        with:
+          name: arch-packages-qt6-m3shapes-git
+          path: aux-deps/qt6-m3shapes-git
+
+      - name: 安装 Clavis 的独立运行依赖
+        if: matrix.pkg == 'clavis-shell'
+        run: |
+          shopt -s nullglob
+          key_cli=(aux-deps/key-cli/key-cli-*.pacman)
+          files=(aux-deps/libcava/*.pacman aux-deps/qt6-m3shapes-git/*.pacman)
+          if [ "${#key_cli[@]}" -ne 1 ] || [ "${#files[@]}" -ne 2 ]; then
+            echo "::error::Clavis 缺少 key-cli 或 AUR 运行库产物"
+            exit 1
+          fi
+          pacman -U --noconfirm "${key_cli[0]}"
+          pacman -U --noconfirm "${files[@]}"
+
       # build.conf 的配置值由这里统一解析；PKGBUILD 只读取受控的 namcap_check 字段，
       # 不会 source PKGBUILD，避免执行仓库中的构建代码。
       - name: 读取构建声明 build.conf
@@ -323,7 +455,6 @@ jobs:
           echo "::group::构建 $PKG"
           if [ "$PKG" = "clavis-shell" ]; then
             bash .github/scripts/prepare-upstream-source.sh StatIndet/quickshell clavis-shell "$d"
-            bash .github/scripts/build-clavis-aur-deps.sh "$d"
           elif [ "$PKG" = "key-cli" ]; then
             bash .github/scripts/prepare-upstream-source.sh StatIndet/key-cli key-cli "$d"
           fi
@@ -411,3 +542,16 @@ jobs:
             pkgs/${{ matrix.pkg }}/extra_artifacts/*
           retention-days: 30
           if-no-files-found: error
+
+      - name: 发布包到 GHCR OCI
+        env:
+          PACKAGE_NAME: ${{ matrix.pkg }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pacman -S --needed --noconfirm curl jq
+          shopt -s nullglob
+          files=("pkgs/$PACKAGE_NAME"/*.pacman)
+          for file in "${files[@]}"; do
+            PACKAGE_FILE="$file" PACKAGE_NAME="$(bsdtar -xOf "$file" .PKGINFO | awk -F ' = ' '$1 == "pkgname" { print $2; exit }')" bash .github/scripts/publish-oci-package.sh
+          done

@@ -5,6 +5,8 @@
 
 # makepkg 工作目录
 src/
+!cpkg/src/
+!cpkg/src/**
 pkg/
 target/
 .deps/

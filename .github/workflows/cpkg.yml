@@ -1,0 +1,41 @@
+name: Build cpkg client
+
+on:
+  push:
+    paths:
+      - 'cpkg/**'
+      - '.github/workflows/cpkg.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: 格式化 Rust 源码
+        run: cargo fmt --manifest-path cpkg/Cargo.toml --all
+
+      - name: 单元测试
+        run: cargo test --manifest-path cpkg/Cargo.toml
+
+      - name: Clippy
+        run: cargo clippy --manifest-path cpkg/Cargo.toml --all-targets
+
+      - name: 构建 release 二进制
+        run: cargo build --manifest-path cpkg/Cargo.toml --release
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: cpkg-x86_64-linux
+          path: cpkg/target/release/cpkg
+          retention-days: 30
+          if-no-files-found: error

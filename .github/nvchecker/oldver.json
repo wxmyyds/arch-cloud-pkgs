@@ -13,8 +13,14 @@
     "key-cli": {
       "version": "20260928.054403"
     },
+    "libcava": {
+      "version": "1.0.0-1"
+    },
     "neriplayer": {
       "version": "NeriPlayer-bad6270.10281721"
+    },
+    "qt6-m3shapes-git": {
+      "version": "r38.6875533-1"
     },
     "wechat": {
       "version": "4.1.13"

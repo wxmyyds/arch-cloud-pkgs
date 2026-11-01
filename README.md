@@ -8,7 +8,9 @@
 |------|------|------|
 | wechat | [腾讯微信](https://linux.weixin.qq.com/) | 腾讯官方微信 Linux x86_64 AppImage 重打包为原生包；仅支持 x86_64，版本自动跟随官网，ARM 版暂未接入 |
 | google-chrome | [Google](https://www.google.com/chrome) | Google 官方 Chrome .deb 重打包；版本与 SHA256 从官方 apt 索引动态解析并由 makepkg 落地校验，打包逻辑对齐 AUR 同名包。`paru -Syu` 提示同版本"升级"时跳过 |
-| clavis-shell | [StatIndet/quickshell](https://github.com/StatIndet/quickshell) | Clavis QML/Qt6 Shell；Actions 克隆上游 main 当前源码，先应用 `pkgs/clavis-shell/patches/*.patch`，再用上游 release.py 生成带日期版本的源码包和 PKGBUILD 后编译；AUR 运行库 libcava 与 qt6-m3shapes-git 也在同一云端任务源码构建并随 artifact 提供。需同时安装 key-cli artifact |
+| clavis-shell | [StatIndet/quickshell](https://github.com/StatIndet/quickshell) | Clavis QML/Qt6 Shell；Actions 克隆上游 main 当前源码，先应用 `pkgs/clavis-shell/patches/*.patch`，再用上游 release.py 生成带日期版本的源码包和 PKGBUILD 后编译。AUR 运行库 `libcava`、`qt6-m3shapes-git` 拆为独立 CI 包；需一并安装 `key-cli` 与两个运行库 |
+| libcava | [AUR](https://aur.archlinux.org/packages/libcava) | Cava shared library；从 AUR PKGBUILD 云端构建，Clavis Shell 运行库 |
+| qt6-m3shapes-git | [AUR](https://aur.archlinux.org/packages/qt6-m3shapes-git) | Qt 6 Material 3 Expressive shapes；从 AUR PKGBUILD 云端构建，Clavis Shell 运行库 |
 | key-cli | [StatIndet/key-cli](https://github.com/StatIndet/key-cli) | Clavis 配套 CLI 与系统指标服务；Actions 克隆上游 main 当前源码并云端编译。artifact 仅包含 key-cli 本体，不包含需单独授权的键盘/CPU 权限包 |
 | neriplayer | [cwuom/NeriPlayer-Desktop](https://github.com/cwuom/NeriPlayer-Desktop) | 多源在线播放音乐客户端（Tauri 2 + Vue 3 + Rust 音频引擎，内置 FFmpeg 解码库）。上游已正式发 Release（tag 形如 `NeriPlayer-<sha7>.<MMDDHHMM>`，每个 Release 附 deb/rpm/AppImage 与 `SHA256SUMS.txt`）：本包取 `releases/latest` 的 tag，直接下载官方 amd64 deb 重打包，版本 = 应用版本 + 构建 epoch（`1.0.0.r<epoch>`）保持单调升级，每次上游发版自动跟随。deb 的 SHA256 直接取自该 Release 的 `SHA256SUMS.txt` 硬校验 |
 | dux-files | [duxlabs-dev/dux-files](https://github.com/duxlabs-dev/dux-files) | Dux Labs 的 Wayland 文件管理器（Quickshell UI + Go daemon，UI 经 go:embed 内嵌进单文件二进制）。上游 release 直接发静态 linux-amd64/arm64 二进制与补全包，本包取 amd64 预编译产物重打包（不编译），桌面项/图标/polkit/D-Bus/portal/systemd 资产从同 tag raw 取源；版本自动跟随 `releases/latest`。运行时依赖 `quickshell`（官方仓库包）|
@@ -20,8 +22,8 @@
 2. 上游发版后可手动触发对应包的构建；二期自动检测目前默认禁用
 3. 等待构建完成（见下方"构建加速"）
 4. 到该次运行页面底部下载对应包的 artifact `arch-packages-<包名>`；每个包单独一个文件，互不影响
-
-> 产物保留 30 天（`retention-days: 30`），过期即不可下载。需要长期留存的请配合三期 Roadmap 的私人仓库。
+> Actions artifact 保留 30 天（`retention-days: 30`）；构建成功后同一包也会发布到 GHCR OCI。
+> 新建的 GHCR package 需要先设为 public，匿名客户端才能读取 manifest 和下载包。
 
 ### 本地安装
 ```bash
@@ -44,7 +46,7 @@ dux-files 是官方预编译二进制重打包（UI 已内嵌，单文件），�
 
 ### Clavis Shell 安装
 
-Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli 两个 artifact，并将其中的 .pacman 文件放在同一目录后运行 `sudo pacman -U *.pacman`。CI 每次从两个上游仓库的 main 获取源码，对 clavis-shell 先应用 `pkgs/clavis-shell/patches/` 下的本地补丁，再通过上游 release.py 按构建日期生成版本并在云端编译（补丁因此被烘焙进源码包与安装包，桌面机无需任何手工改动）；Clavis artifact 另包含 CI 源码构建的 libcava、qt6-m3shapes-git。key-cli artifact 只含 CLI 本体，不含键盘/CPU 特权授权包；桌面机不运行 makepkg。
+Clavis 需要同时安装 `clavis-shell`、`libcava`、`qt6-m3shapes-git` 与 `key-cli` 四个包。CI 为三个依赖建立独立构建 job 与 artifact；构建 clavis-shell 时下载并安装它们，不重复编译。手动安装时，将四个 artifact 中的 .pacman 文件放在同一目录后运行 `sudo pacman -U *.pacman`；使用三期客户端时运行 `cpkg clavis-shell`，客户端会自动解析并安装另外三个依赖。CI 每次从两个上游仓库的 main 获取 Clavis/key-cli 源码，对 clavis-shell 先应用 `pkgs/clavis-shell/patches/` 下的本地补丁，再通过上游 release.py 按构建日期生成版本并云端编译。key-cli artifact 只含 CLI 本体，不含键盘/CPU 特权授权包；桌面机不运行 makepkg。
 
 **当前本地补丁**（每个均为上游未修复时的临时 workaround，含背景、触发条件与移除方法，见 [`pkgs/clavis-shell/patches/README.md`](pkgs/clavis-shell/patches/README.md)）：
 
@@ -101,6 +103,7 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 | `wechat` | `regex` | 官网 SSR 的 `class="main-section__bd-version"` 块；用 class 前缀锚定，避免误命中同名 CSS 文本 |
 | `neriplayer` / `dux-files` | `github` + `use_latest_release` | 跟踪 release tag |
 | `clavis-shell` / `key-cli` | `github` + `branch = "main"` | 两端都是"克隆 main 当前源码"构建，发版覆盖不全，故跟踪提交时间 |
+| `libcava` / `qt6-m3shapes-git` | `aur` | 跟踪 AUR PKGBUILD 版本；任一包更新只触发对应独立构建 |
 
 只把检测结果当**变更信号**：最终 `pkgver` 与校验值仍由各 PKGBUILD 构建时自行解析，
 因此 dux-files 的 `v2.0.0` 这类带前缀的取值不需要与 pkgver 同形。
@@ -173,10 +176,22 @@ git add && git commit && git push   # 自动触发构建
 - [x] 一期：增量构建（只构建变更的包）+ 并行 matrix + cargo 缓存
 - [ ] 二期：nvchecker 自动检测上游发版并触发构建（代码已实现，`schedule` 默认注释掉）
 - [ ] 三期：用 Rust 实现轻量包管理器 `cpkg`，GHCR OCI manifest annotations 提供包元数据，
-  包文件作为 OCI layer 按需下载。客户端负责查询、版本选择与依赖包下载；安装和卸载分别
-  调用 `pacman -U` / `pacman -Rns`，不自行修改 pacman 本地状态或维护 cloud.db。
+  包文件作为 OCI layer 按需下载。客户端负责查询、版本选择、依赖解析与摘要校验；云端包安装由
+  `pacman -U` 执行，卸载参数由用户原样传给 pacman，不自行修改 pacman 本地状态或维护 cloud.db。
 
-> 三期不使用 pacman 仓库数据库（`repo-add` / `cloud.db`）。客户端读取 manifest 即可获取
-> 包元数据，无需下载包文件；安装时校验包文件摘要后交给 pacman 执行事务。卸载使用
-> `pacman -Rns`，递归清理不再被其他包需要的依赖，并移除而非保留 `.pacsave` 配置文件。
-> 远端 cloud 包之间的依赖由客户端解析并准备包文件，再由 pacman 统一检查和安装。
+`cpkg` 客户端的 CI 会运行 Rust 格式化、单元测试和构建，并上传 30 天有效的 x86_64 二进制
+artifact。命令包括 `cpkg list`、`cpkg info <包>`、`cpkg check`、`cpkg <包>`、
+`cpkg install <包...>`、`cpkg upgrade`；`cpkg <包>` 会按云端依赖图补齐尚未安装的包。安装指定版本用
+`cpkg install <包> --version <版本>`，传递 pacman 选项可写在 `--` 后，例如
+`cpkg install clavis-shell -- --noconfirm`。Clavis 的完整依赖由 `cpkg clavis-shell` 自动解析。
+
+`cpkg` 客户端源码按 MIT License 发布（见 [`cpkg/LICENSE`](cpkg/LICENSE)）；此授权仅适用于
+`cpkg/` 客户端，不改变仓库中各上游软件与打包资产原有的许可证。
+
+> 三期不使用 pacman 仓库数据库（`repo-add` / `cloud.db`）。查询只读取 OCI manifest，不下载
+> package layer；安装时下载并校验 SHA-256 后交给 pacman。`cpkg -Rns key-cli`、`cpkg -R key-cli`
+> 等以 pacman 选项开头的命令会将全部参数原样传给 pacman，不添加、删除或改写参数；云端安装
+> 则由 cpkg 展开依赖并调用 `pacman -U`。Clavis 的云端依赖为 `key-cli`、`libcava` 和
+> `qt6-m3shapes-git`。卸载行为由用户选择的 pacman 选项决定，例如 `-Rns` 会递归移除不再需要的
+> 依赖并删除 `.pacsave` 配置文件。系统依赖缺失时由 pacman 拒绝事务。同一版本 tag 不允许覆盖；
+> 需要重打包时应先更新 pkgrel。新建 GHCR package 后需将 visibility 设为 public，客户端才能匿名查询和下载。

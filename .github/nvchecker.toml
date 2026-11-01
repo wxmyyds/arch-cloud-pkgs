@@ -58,3 +58,10 @@ branch = "main"
 source = "github"
 github = "StatIndet/key-cli"
 branch = "main"
+
+# Clavis 运行库独立跟踪 AUR 版本；更新会只触发对应 AUR 包构建。
+[libcava]
+source = "aur"
+
+[qt6-m3shapes-git]
+source = "aur"

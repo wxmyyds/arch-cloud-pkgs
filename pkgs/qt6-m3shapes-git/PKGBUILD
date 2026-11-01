@@ -1,0 +1,9 @@
+# CI 从 AUR 克隆并构建此包；此占位 PKGBUILD 仅供通用选包/质量检查读取。
+pkgname=qt6-m3shapes-git
+pkgver=0
+pkgrel=1
+pkgdesc='Qt6 Material 3 Expressive shapes library'
+arch=('x86_64')
+license=('Apache-2.0')
+namcap_check=true
+package() { return 1; }
