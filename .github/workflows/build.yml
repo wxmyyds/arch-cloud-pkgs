@@ -12,11 +12,6 @@ on:
       - 'pkgs/**'
       - '.github/workflows/build.yml'
       - '.github/scripts/**'
-  # Arch 是滚动发行版，glibc / gcc-libs 等 soname bump 会让已构建的包静默失效。
-  # 每月全量重建一次，避免等到装包时才发现链接断开。
-  # 定时触发时 github.event.before 为空，select job 会走"构建全部"分支。
-  schedule:
-    - cron: '17 4 1 * *'
 
 # 最小权限：本工作流只读代码；产物上传走 job 的 runtime token，不受此约束
 permissions:
@@ -68,10 +63,10 @@ jobs:
               fi
               return
             fi
-            # push / 定时触发：diff 出变更的包或包构建器
+            # push 触发：diff 出变更的包或包构建器
             BEFORE="${BEFORE_SHA:-}"
             if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-              # 新分支首个 push / 定时触发：没有可 diff 的基线，构建全部
+              # 新分支首个 push：没有可 diff 的基线，构建全部
               all_pkgs
               return
             fi

@@ -17,7 +17,7 @@
 
 ### 触发构建
 1. 推送代码后自动触发；或到 **Actions → Build packages → Run workflow** 手动触发
-2. 另外每月 1 号会定时全量重建一次（Arch 滚动更新，glibc/gcc-libs 的 soname bump 会让旧包静默失效）
+2. 上游发版后可手动触发对应包的构建；二期自动检测目前默认禁用
 3. 等待构建完成（见下方"构建加速"）
 4. 到该次运行页面底部下载对应包的 artifact `arch-packages-<包名>`；每个包单独一个文件，互不影响
 
@@ -55,8 +55,9 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
 
 ### 升级某个包
 所有包的 `pkgver` 均在构建时自动解析上游最新版（release tag / apt 索引 / 官网页面 / 工作流构建产物），
-**无需改任何文件**：上游发版后定时重建（每月 1 号）或手动 workflow_dispatch 指定包名
-即取当时最新版。解析失败或版本号格式异常会直接报错终止构建，不会打出错误版本。
+**无需改任何文件**：手动 workflow_dispatch 指定包名即可在构建时解析上游最新版；仓库变更
+也会自动触发相关包构建。二期上游更新检测默认禁用，启用后可自动触发构建。解析失败或
+版本号格式异常会直接报错终止构建，不会打出错误版本。
 
 校验值的来源按包而异，均由 makepkg 下载后落地校验：
 
@@ -77,9 +78,9 @@ Clavis 需要同时下载 arch-packages-clavis-shell 与 arch-packages-key-cli �
   从仓库 raw 流式计算 SHA256。全部由 makepkg 落地校验，另有体积下限、ELF 魔数与
   `dfiles version` 的版本对账兜底。
 
-自动解析版本的包若长期不重建，产物会停留在上次解析的版本；每月 1 号的全量定时
-重建已覆盖这一点。若上游改动导致解析失败（仓库换名、资产命名变化等），构建会
-报错终止——修 PKGBUILD 后 push 即可。
+自动解析版本只在构建时刷新；若上游改动导致解析失败（仓库换名、资产命名变化等），
+构建会报错终止——修 PKGBUILD 后 push 即可。Arch 滚动更新若造成包的 ABI 依赖失效，
+需手动触发对应包重建；本工作流不再定期全量重建。
 
 上游若移动旧 tag，"解析校验值"与"makepkg 下载"两次独立请求间存在 TOCTOU 窗口，
 但校验不一致会直接构建失败，不会产出混版本产物；浮动源（`SKIP`）的包靠
@@ -171,8 +172,11 @@ git add && git commit && git push   # 自动触发构建
 
 - [x] 一期：增量构建（只构建变更的包）+ 并行 matrix + cargo 缓存
 - [ ] 二期：nvchecker 自动检测上游发版并触发构建（代码已实现，`schedule` 默认注释掉）
-- [ ] 三期：Git Tag + Release 作为分发通道（每个版本一个 tag `pkg@ver-rel`，Release
-  描述存该版本全部元数据，Assets 只放安装包），由轻量包管理器读取并安装
+- [ ] 三期：用 Rust 实现轻量包管理器 `cpkg`，GHCR OCI manifest annotations 提供包元数据，
+  包文件作为 OCI layer 按需下载。客户端负责查询、版本选择与依赖包下载；安装和卸载分别
+  调用 `pacman -U` / `pacman -Rns`，不自行修改 pacman 本地状态或维护 cloud.db。
 
-> 三期不使用 pacman 数据库（`repo-add` / `cloud.db`）。版本即 Git Tag，元数据即
-> Release 描述，因此不存在跨包的共享索引，发布过程无需串行化。
+> 三期不使用 pacman 仓库数据库（`repo-add` / `cloud.db`）。客户端读取 manifest 即可获取
+> 包元数据，无需下载包文件；安装时校验包文件摘要后交给 pacman 执行事务。卸载使用
+> `pacman -Rns`，递归清理不再被其他包需要的依赖，并移除而非保留 `.pacsave` 配置文件。
+> 远端 cloud 包之间的依赖由客户端解析并准备包文件，再由 pacman 统一检查和安装。

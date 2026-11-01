@@ -12,9 +12,9 @@
 # 版本号 = 应用版本（deb 文件名）+ 构建 epoch（build-metadata.txt），pkgver 形如
 # 1.0.0.r1793179269，pacman 侧保持单调升级（.r<epoch> 数值递增）。
 #
-# 升级方法：无需修改 pkgver；每月定时重建或手动 workflow_dispatch 指定 neriplayer
-#          即取当时最新 release。上游 app 版本长期为 1.0.0，靠 epoch 区分各次
-#          release，因此每次上游发 Release 都会产出一个更高的 pkgver。
+# 升级方法：无需修改 pkgver；手动 workflow_dispatch 指定 neriplayer 即取当时最新 release。
+# 上游 app 版本长期为 1.0.0，靠 epoch 区分各次 release，因此每次上游发 Release
+# 都会产出一个更高的 pkgver。
 #
 # 校验：deb 的 SHA256 直接取自该 Release 的 SHA256SUMS.txt，makepkg 落地即校验
 #      （早期走 artifact zip 时因无摘要只能 SKIP，现已可硬校验）；主许可证

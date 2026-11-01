@@ -1,7 +1,7 @@
 # Maintainer: wxmyyds <wxmyyds0601@163.com>
 # 云端构建版微信 Linux：腾讯官方 x86_64 AppImage 重打包为 Arch 包。
-# 升级方法：无需修改 pkgver；构建时从官网解析当前版本。每月定时重建或手动
-#          workflow_dispatch 指定 wechat 即可获取官网当时的最新版。
+# 升级方法：无需修改 pkgver；构建时从官网解析当前版本。手动 workflow_dispatch
+#          指定 wechat 即可获取官网当时的最新版。
 #
 # 官网目前只提供固定下载地址，页面未提供可用于 PKGBUILD 的 SHA-256 校验值。
 # 因此 sha256sums 使用 SKIP，prepare() 额外检查文件体积、AppImage type-2 魔数、

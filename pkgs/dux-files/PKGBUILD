@@ -7,8 +7,7 @@
 # 版本号跟随 releases/latest 的 302 重定向（GitHub API 兜底），每次构建自动取
 # 当时最新 stable；预发布 tag（含 "-"）不会出现在 latest，故 pkgver 恒为纯数字。
 #
-# 升级方法：无需修改 pkgver；每月定时重建或手动 workflow_dispatch 指定 dux-files
-#          即取当时最新 release。
+# 升级方法：无需修改 pkgver；手动 workflow_dispatch 指定 dux-files 即取当时最新 release。
 #
 # 校验：二进制与补全包的 SHA256 直接取自该 release 的 .sha256 资产，桌面项 /
 #      图标 / D-Bus / portal / polkit / systemd / LICENSE / README 按同一 tag 从

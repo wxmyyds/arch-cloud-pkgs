@@ -2,8 +2,7 @@
 # 云端构建版 google-chrome：Google 官方 stable 频道 amd64 .deb 重打包为 Arch 包。
 # 升级方法：无需修改 pkgver；构建时从 Google apt 仓库 Packages 索引解析当前
 #          stable 版本与 SHA256（同一 TLS 索引，动态写入 sha256sums，makepkg
-#          落地即校验）。每月定时重建或手动 workflow_dispatch 指定 google-chrome
-#          即取当时最新。
+#          落地即校验）。手动 workflow_dispatch 指定 google-chrome 即取当时最新。
 #
 # 注意：AUR 有同名包 google-chrome（同一思路的打包）——paru -Syu 若提示"升级"
 #      到 AUR 的相同/相近版本，跳过即可，以本仓库 bump 节奏为准。
