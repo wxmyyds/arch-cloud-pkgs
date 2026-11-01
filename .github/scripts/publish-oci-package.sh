@@ -96,11 +96,11 @@ upload_blob() {
             return 1
         }
         location_path="${location#https://ghcr.io}"
-        [[ "$location_path" == "/v2/$repository/blobs/uploads/"* ]] || {
+        [[ "$location_path" == "/v2/$repository/blobs/uploads/"* || "$location_path" == "/v2/$repository/blobs/upload/"* ]] || {
             echo "::error::Registry returned an upload URL outside the expected repository: $safe_location"
             return 1
         }
-    elif [[ "$location" == /v2/$repository/blobs/uploads/* ]]; then
+    elif [[ "$location" == /v2/$repository/blobs/uploads/* || "$location" == /v2/$repository/blobs/upload/* ]]; then
         location="$registry$location"
     else
         echo "::error::Registry returned an unexpected upload Location: $safe_location"
