@@ -180,8 +180,9 @@ git add && git commit && git push   # 自动触发构建
   `pacman -U` 执行，卸载参数由用户原样传给 pacman，不自行修改 pacman 本地状态或维护 cloud.db。
 
 `cpkg` 客户端的 CI 会运行 Rust 格式化、单元测试和构建，并上传 30 天有效的 x86_64 二进制
-artifact。命令包括 `cpkg list`、`cpkg info <包>`、`cpkg check`、`cpkg <包>`、
-`cpkg install <包...>`、`cpkg upgrade`；`cpkg <包>` 会按云端依赖图补齐尚未安装的包。安装指定版本用
+artifact。命令包括 `cpkg ls`（列出所有包）、`cpkg ls <包>`（查看包详情）、
+`cpkg -Ss <正则>`（按名称或简介搜索，兼容 `cpkg --sync --search <正则>`）、
+`cpkg check`、`cpkg <包>`、`cpkg install <包...>` 和 `cpkg upgrade`；`cpkg <包>` 会按云端依赖图补齐尚未安装的包。安装指定版本用
 `cpkg install <包> --version <版本>`，传递 pacman 选项可写在 `--` 后，例如
 `cpkg install clavis-shell -- --noconfirm`。Clavis 的完整依赖由 `cpkg clavis-shell` 自动解析。
 

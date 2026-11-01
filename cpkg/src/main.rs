@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use reqwest::blocking::{Client as HttpClient, Response};
 use reqwest::header::{ACCEPT, AUTHORIZATION, LINK};
+use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -19,7 +20,12 @@ const PKGINFO_ANNOTATION: &str = "org.wxmyyds.cpkg.pkginfo";
 const LAYER_MEDIA_TYPE: &str = "application/vnd.wxmyyds.cpkg.pkg.v1";
 
 #[derive(Parser)]
-#[command(name = "cpkg", version, about = "Cloud package client with pacman argument passthrough")]
+#[command(
+    name = "cpkg",
+    version,
+    about = "Cloud package client with pacman argument passthrough",
+    after_help = "Cloud search: cpkg -Ss <pattern> (matches package name and description)",
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -27,13 +33,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    List,
+    #[command(name = "ls")]
+    List { package: Option<String> },
     Check { package: Option<String> },
-    Info {
-        package: String,
-        #[arg(long)]
-        version: Option<String>,
-    },
     Install {
         packages: Vec<String>,
         #[arg(long)]
@@ -330,9 +332,54 @@ fn run_pacman_passthrough(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
+fn parse_search_args(args: &[OsString]) -> Result<Option<String>> {
+    let values = args.iter().map(|arg| arg.to_str()).collect::<Option<Vec<_>>>();
+    let Some(values) = values else { return Ok(None); };
+    if values.is_empty() { return Ok(None); }
+
+    let query = match values[0] {
+        "-Ss" | "-sS" => {
+            ensure!(values.len() == 2, "usage: cpkg -Ss <pattern>");
+            Some(values[1])
+        }
+        "-S" | "--sync" if values.len() >= 2 && matches!(values[1], "-s" | "--search") => {
+            ensure!(values.len() == 3, "usage: cpkg --sync --search <pattern>");
+            Some(values[2])
+        }
+        "-S" | "--sync" if values.len() == 2 && values[1].starts_with("--search=") => {
+            Some(values[1].trim_start_matches("--search="))
+        }
+        _ => None,
+    };
+    Ok(query.map(str::to_owned))
+}
+
+fn search_matches(package: &CatalogPackage, pattern: &Regex) -> bool {
+    pattern.is_match(&package.name) || pattern.is_match(&package.description)
+}
+
+fn search_packages(http: &HttpClient, catalog: &Catalog, query: &str) -> Result<()> {
+    let pattern = RegexBuilder::new(query).case_insensitive(true).build().context("invalid package search pattern")?;
+    let matches: Vec<&CatalogPackage> = catalog.packages.iter().filter(|package| search_matches(package, &pattern)).collect();
+    if matches.is_empty() {
+        println!("No packages found matching '{query}'.");
+        return Ok(());
+    }
+    for package in matches {
+        match registry_for(http, catalog, &package.name).and_then(|registry| registry.latest_version()) {
+            Ok(version) => {
+                println!("ghcr.io/{OWNER}/{} {}", package.name, version);
+                println!("    {}", package.description);
+            }
+            Err(error) => println!("ghcr.io/{:<20} unavailable ({error})", package.name),
+        }
+    }
+    Ok(())
+}
+
 fn cloud_shorthand(args: &[OsString]) -> Result<Option<(Vec<String>, Vec<OsString>)>> {
     let Some(first) = args.first().and_then(|arg| arg.to_str()) else { return Ok(None); };
-    if first.starts_with('-') || matches!(first, "list" | "check" | "info" | "install" | "upgrade") {
+    if first.starts_with('-') || matches!(first, "ls" | "check" | "install" | "upgrade") {
         return Ok(None);
     }
     let separator = args.iter().position(|arg| arg.as_os_str() == OsStr::new("--")).unwrap_or(args.len());
@@ -354,20 +401,33 @@ fn registry_for(http: &HttpClient, catalog: &Catalog, name: &str) -> Result<Regi
 
 fn run() -> Result<()> {
     let args: Vec<OsString> = std::env::args_os().collect();
+    let search_query = parse_search_args(&args[1..])?;
     if let Some(first) = args.get(1).and_then(|arg| arg.to_str()) {
-        if first.starts_with('-') && !matches!(first, "--help" | "--version") {
+        if first.starts_with('-') && search_query.is_none() && !matches!(first, "--help" | "--version") {
             return run_pacman_passthrough(&args[1..]);
         }
     }
     let shorthand = cloud_shorthand(&args[1..])?;
-    let cli = if shorthand.is_none() { Some(Cli::try_parse_from(args.clone())?) } else { None };
+    let cli = if shorthand.is_none() && search_query.is_none() { Some(Cli::try_parse_from(args.clone())?) } else { None };
     let http = HttpClient::builder().user_agent(concat!("cpkg/", env!("CARGO_PKG_VERSION"))).build()?;
     let catalog = Catalog::load(&http)?;
+    if let Some(query) = search_query {
+        return search_packages(&http, &catalog, &query);
+    }
     if let Some((packages, pacman_args)) = shorthand {
         return install_many(&http, &catalog, &packages, None, &pacman_args);
     }
     match cli.context("missing cpkg command")?.command {
-        Commands::List => {
+        Commands::List { package: Some(package) } => {
+            let registry = registry_for(&http, &catalog, &package)?;
+            let selected = registry.latest_version()?;
+            let metadata = registry.metadata(&selected, &package)?;
+            println!("{} {} ({})", metadata.name, metadata.version, metadata.architecture);
+            println!("{}", metadata.description);
+            println!("OCI layer: {} bytes, {}", metadata.layer.size, metadata.layer.digest);
+            println!("\n{}", metadata.pkginfo);
+        }
+        Commands::List { package: None } => {
             for package in &catalog.packages {
                 match registry_for(&http, &catalog, &package.name).and_then(|registry| registry.latest_version()) {
                     Ok(version) => println!("{:<20} {:<24} {}", package.name, version, package.description),
@@ -392,15 +452,6 @@ fn run() -> Result<()> {
                 }
             }
             if updates == 0 { println!("No updates available."); }
-        }
-        Commands::Info { package, version } => {
-            let registry = registry_for(&http, &catalog, &package)?;
-            let selected = match version { Some(version) => version, None => registry.latest_version()? };
-            let metadata = registry.metadata(&selected, &package)?;
-            println!("{} {} ({})", metadata.name, metadata.version, metadata.architecture);
-            println!("{}", metadata.description);
-            println!("OCI layer: {} bytes, {}", metadata.layer.size, metadata.layer.digest);
-            println!("\n{}", metadata.pkginfo);
         }
         Commands::Install { packages, version, pacman_args } => {
             ensure!(version.is_none() || packages.len() == 1, "--version can only be used with one package");
@@ -524,6 +575,36 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pacman_style_search_options_extract_pattern() {
+        for args in [
+            vec!["-Ss", "clavis"],
+            vec!["--sync", "--search", "clavis"],
+            vec!["-S", "--search=clavis"],
+        ] {
+            let args = args.into_iter().map(OsString::from).collect::<Vec<_>>();
+            assert_eq!(parse_search_args(&args).unwrap().as_deref(), Some("clavis"));
+        }
+    }
+
+    #[test]
+    fn ls_accepts_an_optional_package() {
+        let cli = Cli::try_parse_from(["cpkg", "ls", "clavis-shell"]).unwrap();
+        assert!(matches!(cli.command, Commands::List { package: Some(name) } if name == "clavis-shell"));
+    }
+
+    #[test]
+    fn search_matches_package_name_and_description_case_insensitively() {
+        let package = CatalogPackage {
+            name: "clavis-shell".to_owned(),
+            description: "Clavis QML/Qt6 shell".to_owned(),
+            depends: Vec::new(),
+        };
+        assert!(search_matches(&package, &Regex::new("CLAVIS").unwrap()));
+        assert!(search_matches(&package, &Regex::new("qml").unwrap()));
+        assert!(!search_matches(&package, &Regex::new("wechat").unwrap()));
+    }
 
     #[test]
     fn clavis_dependency_order_includes_all_runtime_packages() {
