@@ -8,7 +8,7 @@ license=('MIT')
 depends=('glibc' 'gcc-libs' 'pacman')
 makedepends=('git' 'rust')
 optdepends=('sudo: run package transactions as a regular user')
-options=('!debug')
+options=('!debug' '!lto')
 source=("arch-cloud-pkgs::git+https://github.com/wxmyyds/arch-cloud-pkgs.git#commit=${CPKG_SOURCE_SHA:-main}")
 sha256sums=('SKIP')
 
