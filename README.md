@@ -192,7 +192,7 @@ cpkg -S clavis-shell=1.2.3-1 --noconfirm
 cpkg -Syu --noconfirm
 ```
 
-下载包文件前 cpkg 会显示待处理包数并询问 `[y/N]`，默认取消；只有明确传入 `--noconfirm` 才跳过该确认。下载完成后 pacman 仍按自身设置确认安装事务。
+下载包文件前 cpkg 会按 pacman 事务格式显示待安装包和总下载大小，并询问 `Proceed with installation? [Y/n]`（中文环境显示本地化提示）；直接回车默认继续，输入 `n` 取消。确认后每个包会显示下载进度条、速度和预计剩余时间。传入 `--noconfirm` 可跳过 cpkg 确认，pacman 自身的安装确认仍按 pacman 设置处理。
 
 以其他 pacman 操作进行的本地查询、移除等操作直接运行 pacman，例如 `sudo pacman -Rns key-cli`；cpkg 不处理也不透传这些命令。云端包安装会下载 OCI layer、校验 SHA-256 后调用 `pacman -U`；官方仓库依赖仍由 pacman 处理。Clavis 的云端依赖为 `key-cli`、`libcava` 和 `qt6-m3shapes-git`，使用 `cpkg -S clavis-shell` 会自动安装依赖。
 

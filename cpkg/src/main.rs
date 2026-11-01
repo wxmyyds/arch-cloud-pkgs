@@ -1,6 +1,7 @@
 mod i18n;
 
 use anyhow::{Context, Result, bail, ensure};
+use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::blocking::{Client as HttpClient, Response};
 use reqwest::header::{ACCEPT, AUTHORIZATION, LINK};
 use regex::{Regex, RegexBuilder};
@@ -96,6 +97,12 @@ struct PackageMetadata {
 struct Layer {
     digest: String,
     size: u64,
+}
+
+#[derive(Debug)]
+struct TransactionPackage {
+    metadata: PackageMetadata,
+    current: Option<String>,
 }
 
 struct RegistryClient {
@@ -220,14 +227,21 @@ impl RegistryClient {
         let mut hasher = Sha256::new();
         let mut buffer = [0u8; 128 * 1024];
         let mut copied = 0u64;
+        let progress = ProgressBar::new(metadata.layer.size);
+        progress.set_style(ProgressStyle::with_template(
+            "{msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {bytes_per_sec} ETA {eta}",
+        )?);
+        progress.set_message(metadata.name.clone());
         loop {
             let count = response.read(&mut buffer).context(tr!(DownloadBlobReadFailed))?;
             if count == 0 { break; }
             file.write_all(&buffer[..count])?;
             hasher.update(&buffer[..count]);
             copied += count as u64;
+            progress.set_position(copied);
         }
         file.flush()?;
+        progress.finish_and_clear();
         ensure!(copied == metadata.layer.size, "{}", tr!(DownloadSizeMismatch, expected = metadata.layer.size, actual = copied));
         let actual_digest = format!("sha256:{:x}", hasher.finalize());
         ensure!(actual_digest == metadata.layer.digest, "{}", tr!(DownloadDigestMismatch));
@@ -653,13 +667,35 @@ fn needs_cloud_confirmation(pacman_args: &[OsString]) -> bool {
     !pacman_args.iter().any(|arg| arg == "--noconfirm")
 }
 
-fn confirm_cloud_transaction(package_count: usize, pacman_args: &[OsString]) -> Result<bool> {
+fn format_size_mib(bytes: u64) -> String {
+    format!("{:.2}", bytes as f64 / (1024.0 * 1024.0))
+}
+
+fn confirmation_accepts(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "" | "y" | "yes" | "是" | "确认")
+}
+
+fn confirm_cloud_transaction(packages: &[TransactionPackage], pacman_args: &[OsString]) -> Result<bool> {
     if !needs_cloud_confirmation(pacman_args) { return Ok(true); }
-    print!("{}", tr!(ConfirmPrompt, count = package_count));
+
+    println!(":: {}", tr!(TransactionHeader, count = packages.len()));
+    let name_width = packages.iter().map(|package| package.metadata.name.len()).max().unwrap_or(0);
+    for package in packages {
+        let name = &package.metadata.name;
+        let target = match &package.current {
+            Some(current) => format!("{current} -> {}", package.metadata.version),
+            None => package.metadata.version.clone(),
+        };
+        println!(" {name:<name_width$} {target}");
+    }
+    let download_size = packages.iter().map(|package| package.metadata.layer.size).sum();
+    println!("\n{}", tr!(TransactionDownloadSize, size = format_size_mib(download_size)));
+    print!(":: {}{}", tr!(ConfirmTitle), tr!(ConfirmPrompt));
     std::io::stdout().flush()?;
+
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
-    if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes" | "是" | "确认") {
+    if confirmation_accepts(&answer) {
         return Ok(true);
     }
     println!("{}", tr!(ConfirmCancelled));
@@ -692,17 +728,15 @@ fn install_many(
             }
         }
         let metadata = registry.metadata(selected, &package)?;
-        println!("{}", tr!(InstallSelected, name = metadata.name, version = metadata.version, architecture = metadata.architecture));
-        println!("{}", tr!(InstallCurrentVersion, version = current.as_deref().unwrap_or(tr!(NotInstalled))));
-        selected_packages.push(metadata);
+        selected_packages.push(TransactionPackage { metadata, current });
     }
     if selected_packages.is_empty() { return Ok(()); }
-    if !confirm_cloud_transaction(selected_packages.len(), pacman_args)? { return Ok(()); }
+    if !confirm_cloud_transaction(&selected_packages, pacman_args)? { return Ok(()); }
     let temporary = tempdir()?;
     let mut paths = Vec::new();
-    for metadata in &selected_packages {
-        let registry = registry_for(http, catalog, &metadata.name)?;
-        paths.push(registry.download(metadata, temporary.path())?);
+    for package in &selected_packages {
+        let registry = registry_for(http, catalog, &package.metadata.name)?;
+        paths.push(registry.download(&package.metadata, temporary.path())?);
     }
     run_pacman_upgrade(&paths, pacman_args)
 }
@@ -714,20 +748,17 @@ fn upgrade(http: &HttpClient, catalog: &Catalog, pacman_args: &[OsString]) -> Re
         let registry = registry_for(http, catalog, &package.name)?;
         let latest = registry.latest_version()?;
         if vercmp(&latest, &current)? > 0 {
-            candidates.push((package.name.clone(), current, latest));
+            let metadata = registry.metadata(&latest, &package.name)?;
+            candidates.push(TransactionPackage { metadata, current: Some(current) });
         }
     }
     if candidates.is_empty() { println!("{}", tr!(UpdateNone)); return Ok(()); }
-    for (name, current, latest) in &candidates {
-        println!("{}", tr!(UpdateAvailable, name = name, current = current, latest = latest));
-    }
-    if !confirm_cloud_transaction(candidates.len(), pacman_args)? { return Ok(()); }
+    if !confirm_cloud_transaction(&candidates, pacman_args)? { return Ok(()); }
     let temporary = tempdir()?;
     let mut paths = Vec::new();
-    for (name, _, version) in &candidates {
-        let registry = registry_for(http, catalog, name)?;
-        let metadata = registry.metadata(version, name)?;
-        paths.push(registry.download(&metadata, temporary.path())?);
+    for package in &candidates {
+        let registry = registry_for(http, catalog, &package.metadata.name)?;
+        paths.push(registry.download(&package.metadata, temporary.path())?);
     }
     run_pacman_upgrade(&paths, pacman_args)
 }
@@ -751,6 +782,15 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pacman_style_confirmation_defaults_to_yes() {
+        assert!(confirmation_accepts(""));
+        assert!(confirmation_accepts("y"));
+        assert!(confirmation_accepts("yes"));
+        assert!(!confirmation_accepts("n"));
+        assert!(!confirmation_accepts("no"));
+    }
 
     #[test]
     fn only_explicit_noconfirm_skips_cloud_confirmation() {
