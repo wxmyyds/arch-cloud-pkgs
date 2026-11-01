@@ -4,16 +4,7 @@
 
 ## 已收录包
 
-| 包名 | 上游 | 说明 |
-|------|------|------|
-| wechat | [腾讯微信](https://linux.weixin.qq.com/) | 腾讯官方微信 Linux x86_64 AppImage 重打包为原生包；仅支持 x86_64，版本自动跟随官网，ARM 版暂未接入 |
-| google-chrome | [Google](https://www.google.com/chrome) | Google 官方 Chrome .deb 重打包；版本与 SHA256 从官方 apt 索引动态解析并由 makepkg 落地校验，打包逻辑对齐 AUR 同名包。`paru -Syu` 提示同版本"升级"时跳过 |
-| clavis-shell | [StatIndet/quickshell](https://github.com/StatIndet/quickshell) | Clavis QML/Qt6 Shell；Actions 克隆上游 main 当前源码，先应用 `pkgs/clavis-shell/patches/*.patch`，再用上游 release.py 生成带日期版本的源码包和 PKGBUILD 后编译。AUR 运行库 `libcava`、`qt6-m3shapes-git` 拆为独立 CI 包；需一并安装 `key-cli` 与两个运行库 |
-| libcava | [AUR](https://aur.archlinux.org/packages/libcava) | Cava shared library；从 AUR PKGBUILD 云端构建，Clavis Shell 运行库 |
-| qt6-m3shapes-git | [AUR](https://aur.archlinux.org/packages/qt6-m3shapes-git) | Qt 6 Material 3 Expressive shapes；从 AUR PKGBUILD 云端构建，Clavis Shell 运行库 |
-| key-cli | [StatIndet/key-cli](https://github.com/StatIndet/key-cli) | Clavis 配套 CLI 与系统指标服务；Actions 克隆上游 main 当前源码并云端编译。artifact 仅包含 key-cli 本体，不包含需单独授权的键盘/CPU 权限包 |
-| neriplayer | [cwuom/NeriPlayer-Desktop](https://github.com/cwuom/NeriPlayer-Desktop) | 多源在线播放音乐客户端（Tauri 2 + Vue 3 + Rust 音频引擎，内置 FFmpeg 解码库）。上游已正式发 Release（tag 形如 `NeriPlayer-<sha7>.<MMDDHHMM>`，每个 Release 附 deb/rpm/AppImage 与 `SHA256SUMS.txt`）：本包取 `releases/latest` 的 tag，直接下载官方 amd64 deb 重打包，版本 = 应用版本 + 构建 epoch（`1.0.0.r<epoch>`）保持单调升级，每次上游发版自动跟随。deb 的 SHA256 直接取自该 Release 的 `SHA256SUMS.txt` 硬校验 |
-| dux-files | [duxlabs-dev/dux-files](https://github.com/duxlabs-dev/dux-files) | Dux Labs 的 Wayland 文件管理器（Quickshell UI + Go daemon，UI 经 go:embed 内嵌进单文件二进制）。上游 release 直接发静态 linux-amd64/arm64 二进制与补全包，本包取 amd64 预编译产物重打包（不编译），桌面项/图标/polkit/D-Bus/portal/systemd 资产从同 tag raw 取源；版本自动跟随 `releases/latest`。运行时依赖 `quickshell`（官方仓库包）|
+当前维护的包、上游来源与打包说明见[包清单](PACKAGES.md)。
 
 ## 使用方法
 
@@ -173,26 +164,43 @@ git add && git commit && git push   # 自动触发构建
 
 ## Roadmap
 
-- [x] 一期：增量构建（只构建变更的包）+ 并行 matrix + cargo 缓存
-- [ ] 二期：nvchecker 自动检测上游发版并触发构建（代码已实现，`schedule` 默认注释掉）
-- [ ] 三期：用 Rust 实现轻量包管理器 `cpkg`，GHCR OCI manifest annotations 提供包元数据，
-  包文件作为 OCI layer 按需下载。客户端负责查询、版本选择、依赖解析与摘要校验；云端包安装由
-  `pacman -U` 执行，卸载参数由用户原样传给 pacman，不自行修改 pacman 本地状态或维护 cloud.db。
+- [x] 一期：增量构建、并行 matrix 与 cargo 缓存
+- [x] 二期：nvchecker 上游版本检测与构建触发已实现；定时 schedule 默认关闭，手动触发默认为 dry run
+- [x] 三期：Rust 客户端 `cpkg` 通过 GHCR OCI 查询、下载和校验云端包，再交由 pacman 安装；不使用 pacman 仓库数据库
 
-`cpkg` 客户端的 CI 会运行 Rust 格式化、单元测试和构建，并上传 30 天有效的 x86_64 二进制
-artifact。命令包括 `cpkg ls`（列出所有包）、`cpkg ls <包>`（查看包详情）、
-`cpkg -Ss <正则>`（按名称或简介搜索，兼容 `cpkg --sync --search <正则>`）、
-`cpkg check`、`cpkg <包>`、`cpkg install <包...>` 和 `cpkg upgrade`；`cpkg <包>` 会按云端依赖图补齐尚未安装的包。`cpkg -Syu`（以及 `--sync --refresh --sysupgrade`）沿用 pacman 的操作语法，但只升级已安装的 GHCR 应用，不运行 pacman 仓库升级；其他兼容的 pacman 选项（如 `--noconfirm`）会传给云端包安装事务。安装指定版本用
-`cpkg install <包> --version <版本>`，传递 pacman 选项可写在 `--` 后，例如
-`cpkg install clavis-shell -- --noconfirm`。Clavis 的完整依赖由 `cpkg clavis-shell` 自动解析。
+## cpkg 使用说明
 
-`cpkg` 客户端源码按 MIT License 发布（见 [`cpkg/LICENSE`](cpkg/LICENSE)）；此授权仅适用于
-`cpkg/` 客户端，不改变仓库中各上游软件与打包资产原有的许可证。
+`cpkg` 是 GHCR 云端包客户端。可用包及上游信息见[包清单](PACKAGES.md)，客户端清单和云端依赖关系见 [`cpkg/packages.json`](cpkg/packages.json)。CI 会执行格式检查、单元测试、Clippy 和 release 构建，并上传 30 天有效的 x86_64 二进制 artifact。
 
-> 三期不使用 pacman 仓库数据库（`repo-add` / `cloud.db`）。查询只读取 OCI manifest，不下载
-> package layer；安装时下载并校验 SHA-256 后交给 pacman。`cpkg -Rns key-cli`、`cpkg -R key-cli`
-> 等 pacman 操作会将参数原样传给 pacman；`-Syu` 是例外，它使用相同操作语法升级已安装的 GHCR 包，
-> 不运行 pacman 仓库升级。云端安装则由 cpkg 展开依赖并调用 `pacman -U`。Clavis 的云端依赖为
-> `key-cli`、`libcava` 和 `qt6-m3shapes-git`。卸载行为由用户选择的 pacman 选项决定，例如 `-Rns` 会递归移除不再需要的
-> 依赖并删除 `.pacsave` 配置文件。系统依赖缺失时由 pacman 拒绝事务。同一版本 tag 不允许覆盖；
-> 需要重打包时应先更新 pkgrel。新建 GHCR package 后需将 visibility 设为 public，客户端才能匿名查询和下载。
+### 命令
+
+| 命令 | 用途 |
+|------|------|
+| `cpkg ls` | 列出可用云端包及最新版本 |
+| `cpkg ls <包>` | 查看包详情和 OCI 摘要信息 |
+| `cpkg -Ss <正则>` | 按包名或简介搜索，支持正则；也可写 `cpkg --sync --search <正则>` |
+| `cpkg check [包]` | 检查已安装云端包是否有更新；不指定包时检查全部 |
+| `cpkg <包>` | 安装或升级云端包，并递归补齐云端依赖 |
+| `cpkg install <包...>` | 安装指定云端包及其云端依赖 |
+| `cpkg upgrade`、`cpkg -Syu` | 升级所有已安装且有新版本的云端包 |
+
+`cpkg -Syu` 使用 pacman 熟悉的 sync/refresh/sysupgrade 操作语法，但只处理 cpkg 管理的 GHCR 包，不运行 pacman 仓库升级。长选项形式为 `cpkg --sync --refresh --sysupgrade`。
+
+指定版本：
+
+```sh
+cpkg install <包> --version <版本>
+```
+
+向云端安装事务传递 pacman 选项时，将它们放在 `--` 后：
+
+```sh
+cpkg install clavis-shell -- --noconfirm
+cpkg -Syu --noconfirm
+```
+
+以 pacman 选项开头的其他命令（例如 `cpkg -Rns key-cli`）会将参数原样传给 pacman，不添加、删除或改写参数。云端包安装会下载 OCI layer、校验 SHA-256 后调用 `pacman -U`；官方仓库依赖仍由 pacman 处理。Clavis 的云端依赖为 `key-cli`、`libcava` 和 `qt6-m3shapes-git`，使用 `cpkg clavis-shell` 会自动安装依赖。
+
+`cpkg` 不使用 `repo-add` 或 `cloud.db`。OCI 元数据查询只读取 manifest，不下载包文件。卸载行为由用户选择的 pacman 选项决定；例如 `-Rns` 会递归移除不再需要的依赖并删除 `.pacsave` 配置文件。新建 GHCR package 后需将 visibility 设为 public，客户端才能匿名查询和下载。同一版本 tag 不允许覆盖，重打包时需先更新 pkgrel。
+
+客户端源码按 MIT License 发布（见 [`cpkg/LICENSE`](cpkg/LICENSE)）；此授权仅适用于 `cpkg/` 客户端，不改变仓库中各上游软件与打包资产原有的许可证。
