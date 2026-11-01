@@ -324,6 +324,47 @@ fn pacman_command() -> Command {
     if is_root() { Command::new("pacman") } else { Command::new("sudo") }
 }
 
+fn is_sync_sysupgrade(args: &[OsString]) -> bool {
+    let values = args.iter().filter_map(|arg| arg.to_str());
+    let (mut sync, mut refresh, mut sysupgrade) = (false, false, false);
+    for value in values {
+        if value == "--" { break; }
+        match value {
+            "--sync" => sync = true,
+            "--refresh" => refresh = true,
+            "--sysupgrade" => sysupgrade = true,
+            _ if value.starts_with('-') && !value.starts_with("--") => {
+                sync |= value[1..].contains('S');
+                refresh |= value[1..].contains('y');
+                sysupgrade |= value[1..].contains('u');
+            }
+            _ => {}
+        }
+    }
+    sync && refresh && sysupgrade
+}
+
+fn cloud_upgrade_args(args: &[OsString]) -> Vec<OsString> {
+    let mut result = Vec::new();
+    for arg in args {
+        let Some(value) = arg.to_str() else {
+            result.push(arg.clone());
+            continue;
+        };
+        match value {
+            "--sync" | "--refresh" | "--sysupgrade" => continue,
+            _ if value.starts_with('-') && !value.starts_with("--") => {
+                let remaining: String = value[1..].chars().filter(|flag| !matches!(flag, 'S' | 'y' | 'u')).collect();
+                if !remaining.is_empty() {
+                    result.push(OsString::from(format!("-{remaining}")));
+                }
+            }
+            _ => result.push(arg.clone()),
+        }
+    }
+    result
+}
+
 fn run_pacman_passthrough(args: &[OsString]) -> Result<()> {
     let mut command = pacman_command();
     if !is_root() { command.arg("pacman"); }
@@ -402,15 +443,19 @@ fn registry_for(http: &HttpClient, catalog: &Catalog, name: &str) -> Result<Regi
 fn run() -> Result<()> {
     let args: Vec<OsString> = std::env::args_os().collect();
     let search_query = parse_search_args(&args[1..])?;
+    let sync_sysupgrade = is_sync_sysupgrade(&args[1..]);
     if let Some(first) = args.get(1).and_then(|arg| arg.to_str()) {
-        if first.starts_with('-') && search_query.is_none() && !matches!(first, "--help" | "--version") {
+        if first.starts_with('-') && search_query.is_none() && !sync_sysupgrade && !matches!(first, "--help" | "--version") {
             return run_pacman_passthrough(&args[1..]);
         }
     }
     let shorthand = cloud_shorthand(&args[1..])?;
-    let cli = if shorthand.is_none() && search_query.is_none() { Some(Cli::try_parse_from(args.clone())?) } else { None };
+    let cli = if shorthand.is_none() && search_query.is_none() && !sync_sysupgrade { Some(Cli::try_parse_from(args.clone())?) } else { None };
     let http = HttpClient::builder().user_agent(concat!("cpkg/", env!("CARGO_PKG_VERSION"))).build()?;
     let catalog = Catalog::load(&http)?;
+    if sync_sysupgrade {
+        return upgrade(&http, &catalog, &cloud_upgrade_args(&args[1..]));
+    }
     if let Some(query) = search_query {
         return search_packages(&http, &catalog, &query);
     }
@@ -575,6 +620,27 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pacman_sysupgrade_syntax_selects_cloud_upgrade() {
+        for args in [
+            vec!["-Syu"],
+            vec!["-Syyu", "--noconfirm"],
+            vec!["--sync", "--refresh", "--sysupgrade"],
+        ] {
+            let args = args.into_iter().map(OsString::from).collect::<Vec<_>>();
+            assert!(is_sync_sysupgrade(&args));
+        }
+        assert!(!is_sync_sysupgrade(&[OsString::from("-Ss"), OsString::from("clavis")]));
+    }
+
+    #[test]
+    fn cloud_upgrade_removes_sync_operation_flags_only() {
+        let args = [OsString::from("-Syu"), OsString::from("--noconfirm")];
+        assert_eq!(cloud_upgrade_args(&args), vec![OsString::from("--noconfirm")]);
+        let args = [OsString::from("--sync"), OsString::from("--refresh"), OsString::from("--sysupgrade"), OsString::from("--color=always")];
+        assert_eq!(cloud_upgrade_args(&args), vec![OsString::from("--color=always")]);
+    }
 
     #[test]
     fn pacman_style_search_options_extract_pattern() {

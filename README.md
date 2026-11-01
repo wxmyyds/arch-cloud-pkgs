@@ -182,7 +182,7 @@ git add && git commit && git push   # 自动触发构建
 `cpkg` 客户端的 CI 会运行 Rust 格式化、单元测试和构建，并上传 30 天有效的 x86_64 二进制
 artifact。命令包括 `cpkg ls`（列出所有包）、`cpkg ls <包>`（查看包详情）、
 `cpkg -Ss <正则>`（按名称或简介搜索，兼容 `cpkg --sync --search <正则>`）、
-`cpkg check`、`cpkg <包>`、`cpkg install <包...>` 和 `cpkg upgrade`；`cpkg <包>` 会按云端依赖图补齐尚未安装的包。安装指定版本用
+`cpkg check`、`cpkg <包>`、`cpkg install <包...>` 和 `cpkg upgrade`；`cpkg <包>` 会按云端依赖图补齐尚未安装的包。`cpkg -Syu`（以及 `--sync --refresh --sysupgrade`）沿用 pacman 的操作语法，但只升级已安装的 GHCR 应用，不运行 pacman 仓库升级；其他兼容的 pacman 选项（如 `--noconfirm`）会传给云端包安装事务。安装指定版本用
 `cpkg install <包> --version <版本>`，传递 pacman 选项可写在 `--` 后，例如
 `cpkg install clavis-shell -- --noconfirm`。Clavis 的完整依赖由 `cpkg clavis-shell` 自动解析。
 
@@ -191,8 +191,8 @@ artifact。命令包括 `cpkg ls`（列出所有包）、`cpkg ls <包>`（查�
 
 > 三期不使用 pacman 仓库数据库（`repo-add` / `cloud.db`）。查询只读取 OCI manifest，不下载
 > package layer；安装时下载并校验 SHA-256 后交给 pacman。`cpkg -Rns key-cli`、`cpkg -R key-cli`
-> 等以 pacman 选项开头的命令会将全部参数原样传给 pacman，不添加、删除或改写参数；云端安装
-> 则由 cpkg 展开依赖并调用 `pacman -U`。Clavis 的云端依赖为 `key-cli`、`libcava` 和
-> `qt6-m3shapes-git`。卸载行为由用户选择的 pacman 选项决定，例如 `-Rns` 会递归移除不再需要的
+> 等 pacman 操作会将参数原样传给 pacman；`-Syu` 是例外，它使用相同操作语法升级已安装的 GHCR 包，
+> 不运行 pacman 仓库升级。云端安装则由 cpkg 展开依赖并调用 `pacman -U`。Clavis 的云端依赖为
+> `key-cli`、`libcava` 和 `qt6-m3shapes-git`。卸载行为由用户选择的 pacman 选项决定，例如 `-Rns` 会递归移除不再需要的
 > 依赖并删除 `.pacsave` 配置文件。系统依赖缺失时由 pacman 拒绝事务。同一版本 tag 不允许覆盖；
 > 需要重打包时应先更新 pkgrel。新建 GHCR package 后需将 visibility 设为 public，客户端才能匿名查询和下载。
