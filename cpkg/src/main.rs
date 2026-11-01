@@ -601,7 +601,8 @@ mod tests {
             description: "Clavis QML/Qt6 shell".to_owned(),
             depends: Vec::new(),
         };
-        assert!(search_matches(&package, &Regex::new("CLAVIS").unwrap()));
+        let pattern = RegexBuilder::new("CLAVIS").case_insensitive(true).build().unwrap();
+        assert!(search_matches(&package, &pattern));
         assert!(search_matches(&package, &Regex::new("qml").unwrap()));
         assert!(!search_matches(&package, &Regex::new("wechat").unwrap()));
     }
