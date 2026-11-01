@@ -104,9 +104,7 @@ Clavis 需要同时安装 `clavis-shell`、`libcava`、`qt6-m3shapes-git` 与 `k
 抽风把基线写成空值后该包再也检测不到更新；某条目取不到时会在日志与 job summary
 里以 `missing` 列出，但不阻断其余包的检测。
 
-**默认禁用**：`check-updates.yml` 的 `schedule` 已注释，手动触发时 `dry_run` 默认
-`true`（只检测、只写日志与 summary）。上线时取消 `schedule` 注释即可全天候自动
-检测；定时触发不受 `dry_run` 约束。
+**已启用**：`check-updates.yml` 每日 `05:23 UTC` 自动检测；发现上游变化时触发对应包构建，并在所有条目都成功取到版本后推进基线。手动触发时 `dry_run` 默认 `true`（只检测，不触发构建）。
 
 ## 构建加速
 
@@ -165,7 +163,7 @@ git add && git commit && git push   # 自动触发构建
 ## Roadmap
 
 - [x] 一期：增量构建、并行 matrix 与 cargo 缓存
-- [x] 二期：nvchecker 上游版本检测与构建触发已实现；定时 schedule 默认关闭，手动触发默认为 dry run
+- [x] 二期：nvchecker 上游版本检测已启用；每日定时检查并自动触发有更新包的构建，手动触发默认为 dry run
 - [x] 三期：Rust 客户端 `cpkg` 通过 GHCR OCI 查询、下载和校验云端包，再交由 pacman 安装；不使用 pacman 仓库数据库
 
 ## cpkg 使用说明

@@ -3,12 +3,8 @@ name: Check upstream updates
 # =====================================================================
 # 二期：自动检测上游发版并触发构建。
 #
-# 现状：代码已实现，但**默认禁用**——
-#   1. 定时触发被注释掉，只有手动 workflow_dispatch 会跑；
-#   2. 手动跑时也要显式传 dry_run=false（默认 true 只检测不构建），
-#      便于上线前先观察几轮判定是否准确。
-#
-# 启用方法：取消下面 schedule 的注释。定时触发会真正触发构建并推进基线。
+# 手动运行默认 dry_run=true（只检测）；每日 schedule 会检测并在有更新时触发构建，
+# 同时推进版本基线。
 # =====================================================================
 on:
   workflow_dispatch:
@@ -18,9 +14,8 @@ on:
         required: false
         default: true
         type: boolean
-  # 二期暂不启用，取消注释即开始每日自动检测
-  # schedule:
-  #   - cron: '23 5 * * *'
+  schedule:
+    - cron: '23 5 * * *'
 
 permissions:
   # 推进基线需要提交 oldver.json；触发 build.yml 需要 actions: write
