@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "packages": [
+    { "name": "cpkg", "description": "GHCR cloud package client for Arch Linux" },
     { "name": "clavis-shell", "description": "Clavis QML/Qt6 shell", "depends": ["key-cli", "libcava", "qt6-m3shapes-git"] },
     { "name": "dux-files", "description": "Dux Labs Wayland file manager" },
     { "name": "google-chrome", "description": "Google Chrome stable for Arch Linux" },

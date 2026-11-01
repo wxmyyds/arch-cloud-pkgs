@@ -1,0 +1,25 @@
+pkgname=cpkg
+pkgver=0.1.0.r${CPKG_BUILD_NUMBER:-0}
+pkgrel=1
+pkgdesc='GHCR cloud package client for Arch Linux'
+arch=('x86_64')
+url='https://github.com/wxmyyds/arch-cloud-pkgs'
+license=('MIT')
+depends=('glibc' 'gcc-libs' 'pacman')
+makedepends=('git' 'rust')
+optdepends=('sudo: run package transactions as a regular user')
+options=('!debug')
+source=("arch-cloud-pkgs::git+https://github.com/wxmyyds/arch-cloud-pkgs.git#commit=${CPKG_SOURCE_SHA:-main}")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/arch-cloud-pkgs"
+  CARGO_TARGET_DIR="$startdir/target" \
+    CPKG_BUILD_VERSION="$pkgver-$pkgrel" \
+    cargo build --manifest-path cpkg/Cargo.toml --release
+}
+
+package() {
+  install -Dm755 "$startdir/target/release/cpkg" "$pkgdir/usr/bin/cpkg"
+  install -Dm644 "$srcdir/arch-cloud-pkgs/cpkg/LICENSE" "$pkgdir/usr/share/licenses/cpkg/LICENSE"
+}

@@ -20,6 +20,10 @@ const MANIFEST_ACCEPT: &str = "application/vnd.oci.image.manifest.v1+json, appli
 const PKGINFO_ANNOTATION: &str = "org.wxmyyds.cpkg.pkginfo";
 const LAYER_MEDIA_TYPE: &str = "application/vnd.wxmyyds.cpkg.pkg.v1";
 
+fn client_version() -> &'static str {
+    option_env!("CPKG_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
 macro_rules! tr {
     ($key:ident) => {
         i18n::text(i18n::Key::$key)
@@ -538,7 +542,7 @@ fn registry_for(http: &HttpClient, catalog: &Catalog, name: &str) -> Result<Regi
 }
 
 fn print_help() {
-    println!("{}", tr!(HelpTitle, version = env!("CARGO_PKG_VERSION")));
+    println!("{}", tr!(HelpTitle, version = client_version()));
     println!("\n{}", tr!(HelpOperations));
     println!("{}", tr!(HelpList));
     println!("{}", tr!(HelpInfo));
@@ -556,12 +560,12 @@ fn run() -> Result<()> {
         return Ok(());
     }
     if args.first().and_then(|arg| arg.to_str()) == Some("--version") {
-        println!("{}", tr!(VersionTitle, version = env!("CARGO_PKG_VERSION")));
+        println!("{}", tr!(VersionTitle, version = client_version()));
         return Ok(());
     }
 
     let action = pacman_action(&args)?;
-    let http = HttpClient::builder().user_agent(concat!("cpkg/", env!("CARGO_PKG_VERSION"))).build()?;
+    let http = HttpClient::builder().user_agent(format!("cpkg/{}", client_version())).build()?;
     let catalog = Catalog::load(&http)?;
     match action {
         PacmanAction::List => {

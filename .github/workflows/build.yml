@@ -10,7 +10,9 @@ on:
   push:
     paths:
       - 'pkgs/**'
+      - 'cpkg/**'
       - '.github/workflows/build.yml'
+      - '.github/workflows/cpkg.yml'
       - '.github/scripts/**'
 
 # 最小权限：本工作流只读代码；产物上传走 job 的 runtime token，不受此约束
@@ -84,6 +86,9 @@ jobs:
               fi
               if printf '%s\n' "$CHANGED" | grep -Fxq '.github/scripts/build-aur-package.sh'; then
                 printf '%s\n' clavis-shell libcava qt6-m3shapes-git
+              fi
+              if printf '%s\n' "$CHANGED" | grep -Eq '^cpkg/|^\.github/workflows/cpkg\.yml$'; then
+                printf '%s\n' cpkg
               fi
             } | sort -u | while IFS= read -r n; do
               if [ -d "pkgs/$n" ]; then
@@ -449,6 +454,8 @@ jobs:
           MAKEPKG_FLAGS: ${{ steps.conf.outputs.makepkg_flags }}
           EXTRA_ARTIFACTS: ${{ steps.conf.outputs.extra_artifacts }}
           NDK_PLATFORM: ${{ steps.conf.outputs.ndk_platform }}
+          CPKG_SOURCE_SHA: ${{ github.sha }}
+          CPKG_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
           d="pkgs/$PKG"
@@ -470,6 +477,9 @@ jobs:
           chown builder:builder "$runtime_dir"
           trap 'rm -rf -- "$runtime_dir"' EXIT
           make_env=(XDG_RUNTIME_DIR="$runtime_dir" NDK_PLATFORM="$NDK_PLATFORM")
+          if [ "$PKG" = "cpkg" ]; then
+            make_env+=(CPKG_SOURCE_SHA="$CPKG_SOURCE_SHA" CPKG_BUILD_NUMBER="$CPKG_BUILD_NUMBER")
+          fi
           if [ "$PKG" = "clavis-shell" ]; then
             make_env+=(QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=)
           fi

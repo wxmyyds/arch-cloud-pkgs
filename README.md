@@ -184,7 +184,7 @@ git add && git commit && git push   # 自动触发构建
 | `cpkg -S <包>=<版本>` | 安装指定版本 |
 | `cpkg -Syu` | 升级所有已安装且有新版本的云端包 |
 
-`cpkg -Syu` 使用 pacman 的 sync/refresh/sysupgrade 操作语法，但只处理 cpkg 管理的 GHCR 包，不运行 pacman 仓库升级。长选项形式为 `cpkg --sync --refresh --sysupgrade`。其他 pacman 选项可直接放在命令中，例如：
+`cpkg -Syu` 使用 pacman 的 sync/refresh/sysupgrade 操作语法，但只处理 cpkg 管理的 GHCR 包，不运行 pacman 仓库升级。安装 `cpkg` 云端包后，`-Syu` 也会检查并更新客户端；可用 `cpkg -S cpkg` 安装客户端。长选项形式为 `cpkg --sync --refresh --sysupgrade`。其他 pacman 选项可直接放在命令中，例如：
 
 ```sh
 cpkg -S clavis-shell key-cli --noconfirm
