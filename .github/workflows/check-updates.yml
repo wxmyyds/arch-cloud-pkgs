@@ -37,6 +37,11 @@ jobs:
       # nvchecker 的 github 源用这个提高 API 配额；不配置也能跑（匿名 60 次/小时）
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      # base-devel 镜像不含 git：缺了它 checkout 会退化成 REST 下载压缩包，
+      # 工作区没有 .git，后面“推进版本基线”的 git 提交/推送必然失败。
+      - name: 安装 git
+        run: pacman -Sy --needed --noconfirm git
+
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
