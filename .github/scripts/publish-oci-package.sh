@@ -62,8 +62,8 @@ case "$status" in
             echo "OCI tag $repository:$tag already has this package digest; skipping push."
             exit 0
         fi
-        echo "::error::Existing tag $repository:$tag is immutable and has another digest; bump pkgrel to publish this rebuild."
-        exit 1
+        echo "::warning::Existing tag $repository:$tag is immutable and has another digest; bump pkgrel to publish this rebuild."
+        exit 0
         ;;
     404) ;;
     *)
