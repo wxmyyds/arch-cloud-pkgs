@@ -4,8 +4,8 @@
 #
 # 上游 release 提供 linux-amd64 / linux-arm64 的静态 Go 二进制（CGO_ENABLED=0）
 # 与 shell 补全包，本包直接取 amd64 产物重打包，不做源码编译。
-# 版本号跟随 releases/latest 的 302 重定向（GitHub API 兜底），每次构建自动取
-# 当时最新 stable；预发布 tag（含 "-"）不会出现在 latest，故 pkgver 恒为纯数字。
+# 版本号跟随 releases/latest 的 302 重定向，每次构建自动取当时最新 stable；
+# 预发布 tag（含 "-"）不会出现在 latest，故 pkgver 恒为纯数字。
 #
 # 升级方法：无需修改 pkgver；手动 workflow_dispatch 指定 dux-files 即取当时最新 release。
 #
@@ -26,11 +26,6 @@ _dux_latest_tag() {
     tag="$(curl -fsSI -o /dev/null -w '%{redirect_url}' \
         'https://github.com/duxlabs-dev/dux-files/releases/latest' \
         | sed -E 's|.*/tag/([^[:space:]]+).*|\1|' | tr -d '\r')"
-    if [[ -z "$tag" ]]; then
-        tag="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
-            'https://api.github.com/repos/duxlabs-dev/dux-files/releases/latest' \
-            | awk -F'"' '/"tag_name":/{print $4; exit}')"
-    fi
     [[ -n "$tag" ]] || return 1
     printf '%s\n' "$tag"
 }
@@ -51,7 +46,7 @@ _urlraw="https://raw.githubusercontent.com/duxlabs-dev/dux-files/${_tag}"
 # release 资产自带 .sha256（内容为 "<hash>  <文件名>"）；解析失败即终止
 _release_sha() {
     local sha
-    sha="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 "$1" \
+    sha="$(curl -fsSL --connect-timeout 15 --max-time 60 "$1" \
         | awk '{print $1; exit}' | tr -d '\r')"
     [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || {
         echo >&2 "!! 无法从 $1 解析 SHA256"
@@ -63,7 +58,7 @@ _release_sha() {
 # 仓库 raw 文件流式计算 SHA256（同 tag 内容，随版本自动更新）
 _raw_sha() {
     local sha
-    sha="$(set -o pipefail; curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 "$1" \
+    sha="$(set -o pipefail; curl -fsSL --connect-timeout 15 --max-time 60 "$1" \
         | sha256sum | cut -d' ' -f1)" || {
         echo >&2 "!! 获取 $1 失败"
         exit 1

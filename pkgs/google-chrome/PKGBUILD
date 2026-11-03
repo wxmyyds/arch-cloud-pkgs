@@ -19,7 +19,7 @@ pkgrel=1
 
 _google_stable_meta() {
     local idx ver sha
-    idx="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+    idx="$(curl -fsSL --connect-timeout 15 --max-time 60 \
         'https://dl.google.com/linux/chrome/deb/dists/stable/main/binary-amd64/Packages')" || return 1
     ver="$(awk '/^Package: google-chrome-stable$/{f=1} f&&/^Version:/{print $2; exit}' <<<"$idx")"
     sha="$(awk '/^Package: google-chrome-stable$/{f=1} f&&/^SHA256:/{print $2; exit}' <<<"$idx")"

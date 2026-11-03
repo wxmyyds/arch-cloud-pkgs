@@ -2,7 +2,7 @@ mod i18n;
 
 use anyhow::{Context, Result, bail, ensure};
 use indicatif::{ProgressBar, ProgressStyle};
-use reqwest::blocking::{Client as HttpClient, Response};
+use reqwest::blocking::Client as HttpClient;
 use reqwest::header::{ACCEPT, AUTHORIZATION, LINK};
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
@@ -65,8 +65,7 @@ struct TokenResponse {
 
 #[derive(Debug, Deserialize)]
 struct TagsResponse {
-    #[serde(default)]
-    tags: Option<Vec<String>>,
+    tags: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,12 +112,12 @@ struct RegistryClient {
 
 impl Catalog {
     fn load(http: &HttpClient) -> Result<Self> {
-        let embedded: Self = serde_json::from_str(include_str!("../packages.json"))?;
-        let fetched = http.get(CATALOG_URL).send().and_then(Response::error_for_status);
-        let catalog = match fetched {
-            Ok(response) => response.json::<Self>().context(tr!(CatalogParseFailed))?,
-            Err(_) => embedded,
-        };
+        let catalog = http
+            .get(CATALOG_URL)
+            .send()?
+            .error_for_status()?
+            .json::<Self>()
+            .context(tr!(CatalogParseFailed))?;
         ensure!(catalog.schema_version == 1, "{}", tr!(CatalogVersionUnsupported, version = catalog.schema_version));
         ensure!(!catalog.packages.is_empty(), "{}", tr!(CatalogEmpty));
         for package in &catalog.packages {
@@ -161,9 +160,14 @@ impl RegistryClient {
         while let Some(url) = next.take() {
             ensure!(visited.insert(url.clone()), "{}", tr!(GhcrRepeatedPagination));
             let response = self.auth(self.http.get(&url)).send()?.error_for_status()?;
-            let link = response.headers().get(LINK).and_then(|value| value.to_str().ok()).map(str::to_owned);
+            let link = response
+                .headers()
+                .get(LINK)
+                .map(|value| value.to_str().context(tr!(GhcrUnexpectedPagination)))
+                .transpose()?
+                .map(str::to_owned);
             let page: TagsResponse = response.json().context(tr!(GhcrTagsFailed))?;
-            tags.extend(page.tags.unwrap_or_default());
+            tags.extend(page.tags);
             next = match link.as_deref().and_then(next_link) {
                 Some(link) if link.starts_with("/v2/") => Some(format!("{REGISTRY}{link}")),
                 Some(link) if link.starts_with("https://ghcr.io/v2/") => Some(link.to_owned()),
@@ -197,7 +201,7 @@ impl RegistryClient {
         let name = pkginfo_field(&pkginfo, "pkgname").context(tr!(PkgNameMissing))?;
         let version_from_pkginfo = pkginfo_field(&pkginfo, "pkgver").context(tr!(PkgVersionMissing))?;
         let architecture = pkginfo_field(&pkginfo, "arch").context(tr!(PkgArchitectureMissing))?;
-        let description = pkginfo_field(&pkginfo, "pkgdesc").unwrap_or_default();
+        let description = pkginfo_field(&pkginfo, "pkgdesc").context(tr!(PkgDescriptionMissing))?;
         ensure!(name == expected_name, "{}", tr!(PkgNameMismatch, expected = expected_name, actual = name));
         ensure!(version_from_pkginfo == version, "{}", tr!(PkgVersionMismatch, tag = version, metadata = version_from_pkginfo));
         ensure!(architecture == "any" || architecture == std::env::consts::ARCH, "{}", tr!(PkgArchitectureMismatch, architecture = architecture));
@@ -318,18 +322,41 @@ fn vercmp(left: &str, right: &str) -> Result<i8> {
     Ok(value)
 }
 
-fn installed_version(package: &str) -> Option<String> {
-    let output = Command::new("pacman").args(["-Q", package]).output().ok()?;
-    if !output.status.success() { return None; }
-    String::from_utf8(output.stdout).ok()?.split_whitespace().nth(1).map(str::to_owned)
+fn installed_version(package: &str) -> Result<Option<String>> {
+    let output = Command::new("pacman")
+        .args(["-Q", package])
+        .env("LC_ALL", "C")
+        .output()
+        .context(tr!(PacmanQueryFailed))?;
+    if output.status.success() {
+        let stdout = String::from_utf8(output.stdout).context(tr!(PacmanQueryOutputInvalid))?;
+        let version = stdout
+            .split_whitespace()
+            .nth(1)
+            .context(tr!(PacmanQueryOutputInvalid))?;
+        return Ok(Some(version.to_owned()));
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.code() == Some(1)
+        && stderr.contains(&format!("package '{package}' was not found"))
+    {
+        return Ok(None);
+    }
+    bail!("{}: {}", tr!(PacmanQueryFailed), stderr.trim())
 }
 
-fn is_root() -> bool {
-    Command::new("id").arg("-u").output().ok().is_some_and(|output| output.status.success() && output.stdout.as_slice() == b"0\n")
-}
-
-fn pacman_command() -> Command {
-    if is_root() { Command::new("pacman") } else { Command::new("sudo") }
+fn is_root() -> Result<bool> {
+    let output = Command::new("id")
+        .arg("-u")
+        .output()
+        .context(tr!(IdentityCheckFailed))?;
+    ensure!(output.status.success(), "{}", tr!(IdentityCheckFailed));
+    let uid = String::from_utf8(output.stdout)
+        .context(tr!(IdentityCheckFailed))?
+        .trim()
+        .parse::<u32>()
+        .context(tr!(IdentityCheckFailed))?;
+    Ok(uid == 0)
 }
 
 fn is_sync_sysupgrade(args: &[OsString]) -> bool {
@@ -405,13 +432,9 @@ fn search_packages(http: &HttpClient, catalog: &Catalog, query: &str) -> Result<
         return Ok(());
     }
     for package in matches {
-        match registry_for(http, catalog, &package.name).and_then(|registry| registry.latest_version()) {
-            Ok(version) => {
-                println!("ghcr.io/{OWNER}/{} {}", package.name, version);
-                println!("{}: {}", tr!(SearchDescription), package.description);
-            }
-            Err(error) => println!("ghcr.io/{:<20} {} ({error})", package.name, tr!(SearchUnavailable)),
-        }
+        let version = registry_for(http, catalog, &package.name)?.latest_version()?;
+        println!("ghcr.io/{OWNER}/{} {}", package.name, version);
+        println!("{}: {}", tr!(SearchDescription), package.description);
     }
     Ok(())
 }
@@ -547,12 +570,8 @@ fn pacman_action(args: &[OsString]) -> Result<PacmanAction> {
     bail!("{}", tr!(CloudOperationUnsupported))
 }
 
-fn catalog_package<'a>(catalog: &'a Catalog, name: &str) -> Result<&'a CatalogPackage> {
-    catalog.find(name)
-}
-
 fn registry_for(http: &HttpClient, catalog: &Catalog, name: &str) -> Result<RegistryClient> {
-    RegistryClient::new(http.clone(), catalog_package(catalog, name)?)
+    RegistryClient::new(http.clone(), catalog.find(name)?)
 }
 
 fn print_help() {
@@ -585,10 +604,8 @@ fn run() -> Result<()> {
         PacmanAction::List => {
             println!("{}", tr!(ListHeader));
             for package in &catalog.packages {
-                match registry_for(&http, &catalog, &package.name).and_then(|registry| registry.latest_version()) {
-                    Ok(version) => println!("{:<20} {:<24} {}", package.name, version, package.description),
-                    Err(error) => println!("{}", tr!(ListUnavailable, name = package.name, error = error)),
-                }
+                let version = registry_for(&http, &catalog, &package.name)?.latest_version()?;
+                println!("{:<20} {:<24} {}", package.name, version, package.description);
             }
         }
         PacmanAction::Info(packages) => {
@@ -620,7 +637,7 @@ fn check_updates(http: &HttpClient, catalog: &Catalog, names: &[String]) -> Resu
     };
     let mut updates = 0;
     for package in packages {
-        let Some(current) = installed_version(&package.name) else { continue; };
+        let Some(current) = installed_version(&package.name)? else { continue; };
         let registry = registry_for(http, catalog, &package.name)?;
         let latest = registry.latest_version()?;
         match vercmp(&latest, &current)? {
@@ -718,7 +735,7 @@ fn install_many(
         let latest = registry.latest_version()?;
         let requested = requested_versions.get(&package).and_then(|version| version.as_deref());
         let selected = requested.unwrap_or(&latest);
-        let current = installed_version(&package);
+        let current = installed_version(&package)?;
         if requested.is_none() {
             if let Some(current) = &current {
                 if vercmp(selected, current)? <= 0 {
@@ -730,21 +747,13 @@ fn install_many(
         let metadata = registry.metadata(selected, &package)?;
         selected_packages.push(TransactionPackage { metadata, current });
     }
-    if selected_packages.is_empty() { return Ok(()); }
-    if !confirm_cloud_transaction(&selected_packages, pacman_args)? { return Ok(()); }
-    let temporary = tempdir()?;
-    let mut paths = Vec::new();
-    for package in &selected_packages {
-        let registry = registry_for(http, catalog, &package.metadata.name)?;
-        paths.push(registry.download(&package.metadata, temporary.path())?);
-    }
-    run_pacman_upgrade(&paths, pacman_args)
+    execute_transaction(http, catalog, &selected_packages, pacman_args)
 }
 
 fn upgrade(http: &HttpClient, catalog: &Catalog, pacman_args: &[OsString]) -> Result<()> {
     let mut candidates = Vec::new();
     for package in &catalog.packages {
-        let Some(current) = installed_version(&package.name) else { continue; };
+        let Some(current) = installed_version(&package.name)? else { continue; };
         let registry = registry_for(http, catalog, &package.name)?;
         let latest = registry.latest_version()?;
         if vercmp(&latest, &current)? > 0 {
@@ -752,11 +761,26 @@ fn upgrade(http: &HttpClient, catalog: &Catalog, pacman_args: &[OsString]) -> Re
             candidates.push(TransactionPackage { metadata, current: Some(current) });
         }
     }
-    if candidates.is_empty() { println!("{}", tr!(UpdateNone)); return Ok(()); }
-    if !confirm_cloud_transaction(&candidates, pacman_args)? { return Ok(()); }
+    if candidates.is_empty() {
+        println!("{}", tr!(UpdateNone));
+        return Ok(());
+    }
+    execute_transaction(http, catalog, &candidates, pacman_args)
+}
+
+fn execute_transaction(
+    http: &HttpClient,
+    catalog: &Catalog,
+    packages: &[TransactionPackage],
+    pacman_args: &[OsString],
+) -> Result<()> {
+    if packages.is_empty() {
+        return Ok(());
+    }
+    if !confirm_cloud_transaction(packages, pacman_args)? { return Ok(()); }
     let temporary = tempdir()?;
     let mut paths = Vec::new();
-    for package in &candidates {
+    for package in packages {
         let registry = registry_for(http, catalog, &package.metadata.name)?;
         paths.push(registry.download(&package.metadata, temporary.path())?);
     }
@@ -765,8 +789,9 @@ fn upgrade(http: &HttpClient, catalog: &Catalog, pacman_args: &[OsString]) -> Re
 
 fn run_pacman_upgrade(paths: &[PathBuf], pacman_args: &[OsString]) -> Result<()> {
     ensure!(!paths.is_empty(), "{}", tr!(TransactionNoPackages));
-    let mut command = pacman_command();
-    if !is_root() { command.arg("pacman"); }
+    let root = is_root()?;
+    let mut command = if root { Command::new("pacman") } else { Command::new("sudo") };
+    if !root { command.arg("pacman"); }
     command.arg("-U").args(pacman_args).args(paths);
     ensure!(command.status()?.success(), "{}", tr!(TransactionFailed));
     Ok(())

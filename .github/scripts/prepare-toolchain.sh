@@ -99,7 +99,7 @@ if [ "${needs_ndk:-false}" = "true" ]; then
     echo "下载 android-ndk $VER（约 1.2GB）..."
     tmp_ndk="$(mktemp /tmp/android-ndk.XXXXXX.zip)"
     trap 'rm -f "$tmp_ndk"' EXIT
-    curl --fail --show-error --location --retry 3 --retry-delay 5 --retry-all-errors \
+    curl --fail --show-error --location \
       "https://dl.google.com/android/repository/android-ndk-${VER}-linux.zip" -o "$tmp_ndk"
     if [ -z "$NDK_SHA1" ]; then
       echo "::error::未配置 ndk_sha1，拒绝使用未经校验的 NDK 下载"

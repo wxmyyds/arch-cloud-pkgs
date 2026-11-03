@@ -16,7 +16,7 @@ pkgrel=1
 _wechat_latest() {
     local page ver
 
-    page="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+    page="$(curl -fsSL --connect-timeout 15 --max-time 60 \
         'https://linux.weixin.qq.com/')" || return 1
 
     # 版本号绑定官网服务端渲染的主版本区域，不从 ARM 区域或页面任意数字取值。

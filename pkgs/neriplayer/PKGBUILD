@@ -56,11 +56,6 @@ _np_latest_tag() {
     tag="$(curl -fsSI -o /dev/null -w '%{redirect_url}' \
         'https://github.com/cwuom/NeriPlayer-Desktop/releases/latest' \
         | sed -E 's|.*/tag/([^[:space:]]+).*|\1|' | tr -d '\r')"
-    if [[ -z "$tag" ]]; then
-        tag="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
-            'https://api.github.com/repos/cwuom/NeriPlayer-Desktop/releases/latest' \
-            | awk -F'"' '/"tag_name":/{print $4; exit}')"
-    fi
     [[ -n "$tag" ]] || return 1
     printf '%s\n' "$tag"
 }
@@ -78,11 +73,11 @@ _tag="$(_np_latest_tag)" || {
 _urlrel="https://github.com/cwuom/NeriPlayer-Desktop/releases/download/${_tag}"
 
 # 该 Release 的两个元数据资产（体积均为几百字节，直接全文取回后解析）
-_sums="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 "$_urlrel/SHA256SUMS.txt")" || {
+_sums="$(curl -fsSL --connect-timeout 15 --max-time 60 "$_urlrel/SHA256SUMS.txt")" || {
     echo >&2 "!! 无法获取 $_urlrel/SHA256SUMS.txt"
     exit 1
 }
-_meta="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 "$_urlrel/build-metadata.txt")" || {
+_meta="$(curl -fsSL --connect-timeout 15 --max-time 60 "$_urlrel/build-metadata.txt")" || {
     echo >&2 "!! 无法获取 $_urlrel/build-metadata.txt"
     exit 1
 }
@@ -130,7 +125,7 @@ pkgver="${_app_ver}.r${_build_epoch}"
 }
 
 # 主许可证：从该 Release 的 build_git_sha 取 raw LICENSE，流式计算 SHA256
-_license_sha="$(set -o pipefail; curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 \
+_license_sha="$(set -o pipefail; curl -fsSL --connect-timeout 15 --max-time 60 \
     "https://raw.githubusercontent.com/cwuom/NeriPlayer-Desktop/${_build_sha}/LICENSE" \
     | sha256sum | cut -d' ' -f1)" || {
     echo >&2 "!! LICENSE 获取失败"
