@@ -31,17 +31,13 @@ emit() {
 [ -f "$config" ] || { echo "::error::缺少 $config"; exit 1; }
 [ -f "$oldver" ] || { echo "::error::缺少基线 $oldver"; exit 1; }
 
-# --- 1. 准备依赖（官方仓库包，无需 pip / 编译）---
-# jq 用于读写 verfile，python3 用于解析 TOML 表名；nvchecker 自身依赖 python，
-# 这里仍逐个检查，避免容器镜像预装状态变化时踩空。
-need_pacman=false
+# --- 1. 校验依赖（依赖由 workflow 在完整系统升级时统一安装；本脚本不做第二条安装路径）。
 for c in nvchecker jq python3; do
-  command -v "$c" >/dev/null 2>&1 || need_pacman=true
+  command -v "$c" >/dev/null 2>&1 || {
+    echo "::error::缺少依赖 $c；请检查工作流的统一 pacman 安装步骤"
+    exit 1
+  }
 done
-if $need_pacman; then
-  pacman -Sy --noconfirm archlinux-keyring >/dev/null
-  pacman -S --needed --noconfirm nvchecker jq python >/dev/null
-fi
 
 # --- 2. GitHub 令牌：提高 API 配额（匿名 60 次/小时够用，但反复调试容易耗尽）。
 # 写到仓库外的临时文件避免误提交；没有令牌也能跑，只是配额低。
