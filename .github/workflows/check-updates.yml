@@ -38,7 +38,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: 同步系统并安装检测依赖
-        run: pacman -Syu --needed --noconfirm git nvchecker jq python
+        run: pacman -Syu --needed --noconfirm git github-cli nvchecker jq python
 
       - uses: actions/checkout@v5
         with:
@@ -73,8 +73,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # 容器里没有 gh，装上；每次运行都是全新容器，无法跨轮缓存
-          command -v gh >/dev/null 2>&1 || pacman -S --needed --noconfirm github-cli >/dev/null
+          # gh 已由工作流统一安装；通过 GitHub API 触发构建，避免 shell 命令注入。
           # CHANGED 是空格分隔的包名，全部来自 nvchecker.toml 的表名，
           # 且已由脚本过滤成 pkgs/ 下真实存在的目录；这里再按字符集兜一次底。
           read -r -a pkgs <<< "$CHANGED"
@@ -96,21 +95,15 @@ jobs:
           && inputs.dry_run != true
           && steps.check.outputs.missing == ''
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           CHANGED: ${{ steps.check.outputs.changed }}
         run: |
           set -euo pipefail
-          # 只改 .github/nvchecker/oldver.json；该路径不在 build.yml 的 paths
-          # 过滤里，因此这次提交不会触发额外构建。
-          cp -f .github/nvchecker/newver.json .github/nvchecker/oldver.json
-          if git diff --quiet -- .github/nvchecker/oldver.json; then
-            echo "基线无变化"
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/nvchecker/oldver.json
-          git commit -m "chore(nvchecker): bump baseline for ${CHANGED// /, }"
-          git push origin HEAD:main
+          path='.github/nvchecker/oldver.json'
+          file_sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=main" --jq .sha)"
+          content="$(base64 -w0 .github/nvchecker/newver.json)"
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$path" -f message="chore(nvchecker): bump baseline for ${CHANGED// /, }" -f content="$content" -f sha="$file_sha" -f branch=main
 
       - name: 上传检测记录
         if: always()
