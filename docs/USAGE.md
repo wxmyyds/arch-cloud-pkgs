@@ -30,6 +30,8 @@ cpkg -Syu
 
 **通过 GHCR**：客户端会解析云端依赖并安装，例如 `cpkg -S clavis-shell` 会一并处理 `key-cli`、`libcava` 和 `qt6-m3shapes-git`。
 
+首次安装的云端依赖先用 `pacman -U --asdeps` 单独成为一个事务，然后再安装你请求的包，因此本地数据库会把它们记为「作为依赖安装」，`sudo pacman -Rns clavis-shell` 能连同不再需要的依赖一起清掉。已经被显式安装过的包（以及需要一并升级的已装依赖）留在主事务里处理，安装原因保持不变；若你自行传入 `--asdeps` 或 `--asexplicit`，cpkg 尊重该选择并退回单个事务。需要拆成两次事务时 cpkg 会调用两次 pacman，sudo 凭据缓存通常只需输入一次密码。
+
 **通过 Actions artifact**：从对应构建运行下载包文件，然后安装：
 
 ```sh

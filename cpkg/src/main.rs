@@ -102,6 +102,18 @@ struct Layer {
 struct TransactionPackage {
     metadata: PackageMetadata,
     current: Option<String>,
+    /// Named on the cpkg command line rather than pulled in as a cloud dependency.
+    target: bool,
+}
+
+impl TransactionPackage {
+    /// A package cpkg pulled in only as a cloud dependency and that is not
+    /// installed yet. pacman records every `-U` target as explicitly installed,
+    /// so these must be installed with `--asdeps` unless the caller asked for a
+    /// specific reason; otherwise `pacman -Rns <package>` leaves them behind.
+    fn fresh_dependency(&self) -> bool {
+        !self.target && self.current.is_none()
+    }
 }
 
 struct RegistryClient {
@@ -728,6 +740,7 @@ fn install_many(
     ensure!(!targets.is_empty(), "{}", tr!(InstallNoPackages));
     let requested_versions: HashMap<String, Option<String>> = targets.iter().cloned().collect();
     let roots: Vec<String> = targets.iter().map(|(name, _)| name.clone()).collect();
+    let requested_names: HashSet<&str> = roots.iter().map(String::as_str).collect();
     let order = dependency_order(catalog, &roots)?;
     let mut selected_packages = Vec::new();
     for package in order {
@@ -745,7 +758,8 @@ fn install_many(
             }
         }
         let metadata = registry.metadata(selected, &package)?;
-        selected_packages.push(TransactionPackage { metadata, current });
+        let target = requested_names.contains(package.as_str());
+        selected_packages.push(TransactionPackage { metadata, current, target });
     }
     execute_transaction(http, catalog, &selected_packages, pacman_args)
 }
@@ -758,7 +772,7 @@ fn upgrade(http: &HttpClient, catalog: &Catalog, pacman_args: &[OsString]) -> Re
         let latest = registry.latest_version()?;
         if vercmp(&latest, &current)? > 0 {
             let metadata = registry.metadata(&latest, &package.name)?;
-            candidates.push(TransactionPackage { metadata, current: Some(current) });
+            candidates.push(TransactionPackage { metadata, current: Some(current), target: true });
         }
     }
     if candidates.is_empty() {
@@ -779,12 +793,40 @@ fn execute_transaction(
     }
     if !confirm_cloud_transaction(packages, pacman_args)? { return Ok(()); }
     let temporary = tempdir()?;
-    let mut paths = Vec::new();
+    let mut dependencies = Vec::new();
+    let mut install_paths = Vec::new();
     for package in packages {
         let registry = registry_for(http, catalog, &package.metadata.name)?;
-        paths.push(registry.download(&package.metadata, temporary.path())?);
+        let path = registry.download(&package.metadata, temporary.path())?;
+        if package.fresh_dependency() {
+            dependencies.push(path);
+        } else {
+            install_paths.push(path);
+        }
     }
-    run_pacman_upgrade(&paths, pacman_args)
+
+    // Install fresh cloud dependencies in their own `--asdeps` transaction so
+    // pacman records them as dependencies; see TransactionPackage::fresh_dependency.
+    // A caller-supplied reason flag keeps everything in one transaction instead.
+    if !dependencies.is_empty() && !reason_flag_requested(pacman_args) {
+        run_pacman_upgrade(&dependencies, &dependency_install_args(pacman_args))?;
+    } else if !dependencies.is_empty() {
+        install_paths.extend(dependencies);
+    }
+    if install_paths.is_empty() {
+        return Ok(());
+    }
+    run_pacman_upgrade(&install_paths, pacman_args)
+}
+
+fn reason_flag_requested(pacman_args: &[OsString]) -> bool {
+    pacman_args.iter().any(|arg| matches!(arg.to_str(), Some("--asdeps") | Some("--asexplicit")))
+}
+
+fn dependency_install_args(pacman_args: &[OsString]) -> Vec<OsString> {
+    let mut args = pacman_args.to_vec();
+    args.push(OsString::from("--asdeps"));
+    args
 }
 
 fn run_pacman_upgrade(paths: &[PathBuf], pacman_args: &[OsString]) -> Result<()> {
@@ -899,6 +941,44 @@ mod tests {
         let catalog: Catalog = serde_json::from_str(include_str!("../packages.json")).unwrap();
         let order = dependency_order(&catalog, &["clavis-shell".to_owned()]).unwrap();
         assert_eq!(order, vec!["key-cli", "libcava", "qt6-m3shapes-git", "clavis-shell"].into_iter().map(str::to_owned).collect::<Vec<_>>());
+    }
+
+    fn transaction_metadata(name: &str) -> PackageMetadata {
+        PackageMetadata {
+            name: name.to_owned(),
+            version: "1.0-1".to_owned(),
+            architecture: "x86_64".to_owned(),
+            description: String::new(),
+            pkginfo: String::new(),
+            layer: Layer { digest: String::new(), size: 0 },
+        }
+    }
+
+    #[test]
+    fn only_unrequested_fresh_packages_install_as_dependencies() {
+        let fresh_dependency = TransactionPackage { metadata: transaction_metadata("key-cli"), current: None, target: false };
+        assert!(fresh_dependency.fresh_dependency());
+
+        let requested = TransactionPackage { metadata: transaction_metadata("clavis-shell"), current: None, target: true };
+        assert!(!requested.fresh_dependency());
+
+        // Upgrades keep the reason pacman already recorded, so they stay explicit.
+        let installed = TransactionPackage {
+            metadata: transaction_metadata("libcava"),
+            current: Some("1.0.0-1".to_owned()),
+            target: false,
+        };
+        assert!(!installed.fresh_dependency());
+    }
+
+    #[test]
+    fn dependency_transaction_forces_deps_unless_caller_picks_a_reason() {
+        let args = vec![OsString::from("--noconfirm")];
+        assert!(!reason_flag_requested(&args));
+        assert_eq!(dependency_install_args(&args), vec![OsString::from("--noconfirm"), OsString::from("--asdeps")]);
+        assert!(reason_flag_requested(&[OsString::from("--asdeps")]));
+        assert!(reason_flag_requested(&[OsString::from("--asexplicit")]));
+        assert!(!reason_flag_requested(&[OsString::from("--color=always")]));
     }
 
     #[test]
