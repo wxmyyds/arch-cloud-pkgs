@@ -8,7 +8,7 @@
 | wechat | [腾讯微信](https://linux.weixin.qq.com/) | 腾讯官方微信 Linux x86_64 AppImage 重打包为原生包；仅支持 x86_64，版本自动跟随官网，ARM 版暂未接入 |
 | google-chrome | [Google](https://www.google.com/chrome) | Google 官方 Chrome .deb 重打包；版本与 SHA256 从官方 apt 索引动态解析并由 makepkg 落地校验，打包逻辑对齐 AUR 同名包。`paru -Syu` 提示同版本“升级”时跳过 |
 | clavis-shell | [StatIndet/quickshell](https://github.com/StatIndet/quickshell) | Clavis QML/Qt6 Shell；Actions 克隆上游 main 当前源码，先应用 `pkgs/clavis-shell/patches/*.patch`，再用上游 release.py 生成带日期版本的源码包和 PKGBUILD 后编译。需一并安装 `key-cli`、`libcava` 与 `qt6-m3shapes-git` |
-| libcava | [AUR](https://aur.archlinux.org/packages/libcava) | Cava shared library；从 AUR PKGBUILD 云端构建，Clavis Shell 运行库 |
+| libcava | [AUR](https://aur.archlinux.org/packages/libcava) | Cava shared library；从 AUR PKGBUILD 云端构建，Clavis Shell 运行库。重编需抬 `pkgs/libcava/pkgrel`（AUR 的 pkgrel 恒为 1，否则命中已存在的不可变 OCI tag 不会发布） |
 | qt6-m3shapes-git | [AUR](https://aur.archlinux.org/packages/qt6-m3shapes-git) | Qt 6 Material 3 Expressive shapes；从 AUR PKGBUILD 云端构建，Clavis Shell 运行库 |
 | key-cli | [StatIndet/key-cli](https://github.com/StatIndet/key-cli) | Clavis 配套 CLI 与系统指标服务；Actions 克隆上游 main 当前源码并云端编译。artifact 仅包含 key-cli 本体，不包含需单独授权的键盘/CPU 权限包 |
 | neriplayer | [cwuom/NeriPlayer-Desktop](https://github.com/cwuom/NeriPlayer-Desktop) | 多源在线播放音乐客户端（Tauri 2 + Vue 3 + Rust 音频引擎，内置 FFmpeg 解码库）。跟踪最新 Release，下载官方 amd64 deb 重打包；版本包含单调递增的构建 epoch，SHA256 从 `SHA256SUMS.txt` 校验 |

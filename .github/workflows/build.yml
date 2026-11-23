@@ -176,6 +176,11 @@ jobs:
         run: |
           set -euo pipefail
           d="pkgs/$PKG"
+          # AUR 包重编时可通过 pkgs/<pkg>/pkgrel 抬 pkgrel，让产物落到新的不可变 OCI tag
+          if [ -f "$d/pkgrel" ]; then
+            export AUR_PKGREL_OVERRIDE="$(tr -d '[:space:]' < "$d/pkgrel")"
+            echo "AUR pkgrel override: $AUR_PKGREL_OVERRIDE"
+          fi
           if [ "$PKG" = key-cli ]; then
             bash .github/scripts/prepare-toolchain.sh "$d"
             bash .github/scripts/prepare-upstream-source.sh StatIndet/key-cli key-cli "$d"

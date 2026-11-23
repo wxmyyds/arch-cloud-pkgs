@@ -14,6 +14,15 @@ chown builder:builder "$workdir"
 sudo -u builder git clone --depth=1 "https://aur.archlinux.org/${package}.git" "$workdir/source"
 (
     cd "$workdir/source"
+    # Optional per-package pkgrel override: pkgs/<package>/pkgrel holds the pkgrel
+    # the caller wants baked into the clone. AUR keeps pkgrel=1 forever, so a
+    # rebuild that must land on GHCR under a fresh immutable OCI tag (e.g. a
+    # runtime soname change such as sndio 7 -> 9) needs a bumped pkgrel here.
+    pkgrel="${AUR_PKGREL_OVERRIDE:-}"
+    if [[ -n "$pkgrel" ]]; then
+        sed -i -E "s/^pkgrel=.*/pkgrel=${pkgrel}/" PKGBUILD
+        chown builder:builder PKGBUILD
+    fi
     sudo -u builder makepkg -sf --noconfirm
 )
 
