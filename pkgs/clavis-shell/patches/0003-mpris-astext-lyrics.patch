@@ -1,0 +1,2707 @@
+diff --git a/Modules/Keystone/LyricsContent/HorizontalLyricsLayout.qml b/Modules/Keystone/LyricsContent/HorizontalLyricsLayout.qml
+index 20f7bb7..49468e6 100644
+--- a/Modules/Keystone/LyricsContent/HorizontalLyricsLayout.qml
++++ b/Modules/Keystone/LyricsContent/HorizontalLyricsLayout.qml
+@@ -34,13 +34,13 @@ Item {
+         anchors.top: parent.top
+         anchors.bottom: parent.bottom
+         width: root.currentTextWidth
+-        interactive: false
++        interactive: true
+         animateAppearance: false
+         animateMovement: false
+-        showVerticalScrollBar: false
++        showVerticalScrollBar: true
+         model: root.lyricsModel
+         currentIndex: root.currentLineIndex
+-        highlightRangeMode: ListView.StrictlyEnforceRange
++        highlightRangeMode: ListView.NoHighlightRange
+         preferredHighlightBegin: 0
+         preferredHighlightEnd: 0
+         highlightMoveDuration: 400
+@@ -63,6 +63,7 @@ Item {
+ 
+                 anchors.centerIn: parent
+                 text: parent.modelData.text
++                textFormat: Text.PlainText
+                 color: Appearance.m3colors.darkmode ? "white" : "black"
+                 font.family: Fonts.ui
+                 font.pixelSize: 15
+diff --git a/Modules/Keystone/LyricsContent/LyricsContent.qml b/Modules/Keystone/LyricsContent/LyricsContent.qml
+index 2a2ced6..e371211 100644
+--- a/Modules/Keystone/LyricsContent/LyricsContent.qml
++++ b/Modules/Keystone/LyricsContent/LyricsContent.qml
+@@ -10,16 +10,9 @@ Item {
+     property string edge: "top"
+     readonly property var lyricsModel: Lyrics.lyrics
+     readonly property string artUrl: player ? player.trackArtUrl || "" : ""
+-    readonly property int currentLineIndex: {
+-        const lines = Lyrics.lyrics;
+-        if (!root.player || !Lyrics.hasSynchronizedLyrics || !lines || lines.length === 0)
+-            return -1;
+-
+-        const position = root.player === MediaManager.active ? MediaManager.currentPosition : Math.max(0, Number(
+-                                                                                                           root.player.position)
+-                                                                                                       || 0);
+-        return Lyrics.indexForTime(position);
+-    }
++    // Plain-text mode has no playback-position cursor. The horizontal view can
++    // be scrolled manually; the compact vertical view shows the first line.
++    readonly property int currentLineIndex: lyricsModel.length > 0 ? 0 : -1
+     readonly property string currentLyric: currentLineIndex >= 0 && currentLineIndex < lyricsModel.length ? String(
+                                                                                                                 lyricsModel[currentLineIndex].text
+                                                                                                                 || "") : lyricsModel
+diff --git a/Modules/Keystone/LyricsContent/VerticalLyricsLayout.qml b/Modules/Keystone/LyricsContent/VerticalLyricsLayout.qml
+index 3353aab..f4ca940 100644
+--- a/Modules/Keystone/LyricsContent/VerticalLyricsLayout.qml
++++ b/Modules/Keystone/LyricsContent/VerticalLyricsLayout.qml
+@@ -143,6 +143,7 @@ Item {
+ 
+                     anchors.centerIn: parent
+                     text: parent.modelData.text
++                    textFormat: Text.PlainText
+                     color: Appearance.m3colors.darkmode ? "white" : "black"
+                     font.family: Fonts.ui
+                     font.pixelSize: 15
+diff --git a/Services/LyricsTrackService.qml b/Services/LyricsTrackService.qml
+index f198b66..a0d6363 100644
+--- a/Services/LyricsTrackService.qml
++++ b/Services/LyricsTrackService.qml
+@@ -9,31 +9,17 @@ Singleton {
+ 
+     readonly property var player: MediaManager.active
+ 
+-    function playerIdentity(playerObject) {
+-        if (!playerObject)
+-            return "";
+-
+-        const service = playerObject.dbusName || playerObject.busName
+-            || playerObject.identity || "";
+-        const uniqueId = playerObject.uniqueId === undefined
+-            ? "" : String(playerObject.uniqueId);
+-        return String(service) + ":" + uniqueId;
+-    }
+-
+     function sync() {
+-        const current = MediaManager.active;
+-        if (!current || !String(current.trackTitle || "").trim()) {
++        const current = root.player;
++        if (!current) {
+             Lyrics.clearTrack();
+             return;
+         }
+-
+-        Lyrics.setTrack(
+-            String(current.trackArtist || ""),
+-            String(current.trackTitle || ""),
+-            String(current.trackAlbum || ""),
+-            Number(current.length) > 0 ? Number(current.length) : 0,
+-            root.playerIdentity(current)
+-        );
++        // Quickshell already subscribes to MPRIS PropertiesChanged. Consume the
++        // full current map so field removal, late lyrics and same-song updates clear
++        // or replace the previous text without a second lookup or timer.
++        const identity = current.dbusName || current.busName || current.identity || "";
++        Lyrics.setMetadata(String(identity), current.metadata || {});
+     }
+ 
+     function initialize() {
+@@ -45,18 +31,20 @@ Singleton {
+     Connections {
+         target: MediaManager
+ 
+-        function onActiveChanged() { root.sync(); }
++        function onActiveChanged() {
++            root.sync();
++        }
+     }
+ 
+     Connections {
+         target: root.player
+         ignoreUnknownSignals: true
+ 
+-        function onTrackTitleChanged() { root.sync(); }
+-        function onTrackArtistChanged() { root.sync(); }
+-        function onTrackAlbumChanged() { root.sync(); }
+-        function onLengthChanged() { root.sync(); }
+-        function onUniqueIdChanged() { root.sync(); }
+-        function onIdentityChanged() { root.sync(); }
++        function onMetadataChanged() {
++            root.sync();
++        }
++        function onIdentityChanged() {
++            root.sync();
++        }
+     }
+ }
+diff --git a/core/plugin/lyrics/CMakeLists.txt b/core/plugin/lyrics/CMakeLists.txt
+index b3d0057..e7e1e9f 100644
+--- a/core/plugin/lyrics/CMakeLists.txt
++++ b/core/plugin/lyrics/CMakeLists.txt
+@@ -16,6 +16,5 @@ target_include_directories(ClavisLyrics PUBLIC src)
+ 
+ target_link_libraries(ClavisLyrics PRIVATE
+     Qt6::Core
+-    Qt6::Network
+     Qt6::Qml
+ )
+diff --git a/core/plugin/lyrics/src/lyrics.cpp b/core/plugin/lyrics/src/lyrics.cpp
+index 944b493..8f7938a 100644
+--- a/core/plugin/lyrics/src/lyrics.cpp
++++ b/core/plugin/lyrics/src/lyrics.cpp
+@@ -1,1446 +1,56 @@
+ #include "lyrics.h"
+ 
+-#include <QCryptographicHash>
+-#include <QDir>
+-#include <QDirIterator>
+-#include <QFile>
+-#include <QFileInfo>
+-#include <QJsonArray>
+-#include <QJsonDocument>
+-#include <QJsonObject>
+-#include <QNetworkCookieJar>
+-#include <QNetworkRequest>
++#include <QMetaType>
+ #include <QRegularExpression>
+-#include <QSaveFile>
+-#include <QUrlQuery>
++#include <utility>
+ 
+-#include <algorithm>
+-#include <cmath>
+-#include <limits>
+-
+-namespace {
+-
+-constexpr int kLoadDebounceMs = 80;
+-constexpr int kNetEaseSearchLimit = 5;
+-
+-constexpr auto kNetEaseUserAgent = "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0";
+-
+-QString normalized(const QString &value)
+-{
+-    return value.normalized(QString::NormalizationForm_KC).simplified().toLower();
+-}
+-
+-QString comparable(const QString &value)
+-{
+-    QString result = normalized(value);
+-    static const QRegularExpression separators(QStringLiteral("[^\\p{L}\\p{N}]+"));
+-    result.replace(separators, QStringLiteral(" "));
+-    return result.simplified();
+-}
+-
+-QString sanitizePathPart(const QString &value)
+-{
+-    QString result;
+-    result.reserve(value.size());
+-    for (const QChar character : value) {
+-        if (character.isNull() || character.category() == QChar::Other_Control ||
+-            character == QLatin1Char('/') || character == QLatin1Char('\\')) {
+-            result.append(QLatin1Char('_'));
+-        } else {
+-            result.append(character);
+-        }
+-    }
+-    return result.trimmed();
+-}
+-
+-double fractionalSeconds(const QString &fraction)
+-{
+-    if (fraction.isEmpty())
+-        return 0.0;
+-
+-    bool ok = false;
+-    const int value = fraction.toInt(&ok);
+-    if (!ok)
+-        return 0.0;
+-    if (fraction.size() == 1)
+-        return value / 10.0;
+-    if (fraction.size() == 2)
+-        return value / 100.0;
+-    return value / 1000.0;
+-}
+-
+-QString firstString(const QJsonObject &object, const QStringList &keys)
+-{
+-    for (const QString &key : keys) {
+-        const QString value = object.value(key).toString().trimmed();
+-        if (!value.isEmpty())
+-            return value;
+-    }
+-    return {};
+-}
+-
+-QString jsonId(const QJsonValue &value)
+-{
+-    if (value.isString())
+-        return value.toString();
+-    if (value.isDouble())
+-        return QString::number(static_cast<qlonglong>(value.toDouble()));
+-    return {};
+-}
+-
+-double jsonDurationSeconds(const QJsonObject &object)
+-{
+-    QJsonValue value = object.value(QStringLiteral("duration"));
+-    if (value.isUndefined() || value.isNull())
+-        value = object.value(QStringLiteral("dt"));
+-    if (value.isUndefined() || value.isNull())
+-        value = object.value(QStringLiteral("duration_ms"));
+-
+-    double duration = value.toDouble();
+-    if (duration <= 0.0 && value.isString())
+-        duration = value.toString().toDouble();
+-    if (duration > 10000.0)
+-        duration /= 1000.0;
+-    return duration > 0.0 && std::isfinite(duration) ? duration : 0.0;
+-}
+-
+-double textSimilarity(const QString &expected, const QString &actual)
+-{
+-    const QString left = comparable(expected);
+-    const QString right = comparable(actual);
+-    if (left.isEmpty() || right.isEmpty())
+-        return 0.0;
+-    if (left == right)
+-        return 1.0;
+-    if (right.contains(left) || left.contains(right))
+-        return 0.78;
+-
+-    const QStringList leftTokens = left.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+-    const QStringList rightTokens = right.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+-    if (leftTokens.isEmpty() || rightTokens.isEmpty())
+-        return 0.0;
+-
+-    int matched = 0;
+-    for (const QString &token : leftTokens) {
+-        if (rightTokens.contains(token))
+-            ++matched;
+-    }
+-    return static_cast<double>(matched) / static_cast<double>(leftTokens.size());
+-}
+-
+-bool hasVersionTerm(const QString &value, const QString &term)
++void Lyrics::publish(const QString &status, QVariantList lines, const QString &error)
+ {
+-    const QString pattern = QStringLiteral("(?:^| )%1(?:$| )").arg(QRegularExpression::escape(term));
+-    return QRegularExpression(pattern).match(comparable(value)).hasMatch();
+-}
+-
+-double candidateScore(const QString &artist, const QString &title, const QString &album, double duration,
+-                      const QVariantMap &candidate)
+-{
+-    const QString candidateTitle = candidate.value(QStringLiteral("title")).toString();
+-    const QString candidateArtist = candidate.value(QStringLiteral("artist")).toString();
+-    const QString candidateAlbum = candidate.value(QStringLiteral("album")).toString();
+-    const double candidateDuration = candidate.value(QStringLiteral("duration")).toDouble();
+-
+-    const double titleScore = textSimilarity(title, candidateTitle);
+-    const double artistScore = textSimilarity(artist, candidateArtist);
+-    // The title is the only required identity field. A missing artist/album/
+-    // duration is incomplete metadata, not evidence that the candidate is
+-    // wrong. Only an obviously unrelated title is rejected here; the score
+-    // remains primarily a ranking signal for the fallback loop.
+-    if (titleScore < 0.45 || (!artist.isEmpty() && !candidateArtist.isEmpty() && artistScore < 0.25))
+-        return -1.0;
+-
+-    double weightedScore = titleScore * 50.0;
+-    double availableWeight = 50.0;
+-
+-    if (!artist.isEmpty() && !candidateArtist.isEmpty()) {
+-        weightedScore += artistScore * 35.0;
+-        availableWeight += 35.0;
+-    }
+-
+-    if (!album.isEmpty() && !candidateAlbum.isEmpty()) {
+-        weightedScore += textSimilarity(album, candidateAlbum) * 10.0;
+-        availableWeight += 10.0;
+-    }
+-
+-    if (duration > 0.0 && candidateDuration > 0.0) {
+-        const double difference = std::abs(duration - candidateDuration);
+-        double durationScore = 0.0;
+-        if (difference <= 2.0)
+-            durationScore = 1.0;
+-        else if (difference <= 5.0)
+-            durationScore = 0.64;
+-        else if (difference <= 12.0)
+-            durationScore = 0.24;
+-        weightedScore += durationScore * 25.0;
+-        availableWeight += 25.0;
+-    }
+-
+-    double score = availableWeight > 0.0 ? weightedScore / availableWeight * 100.0 : 0.0;
+-
+-    static const QStringList versionTerms = {
+-        QStringLiteral("live"),         QStringLiteral("remix"),    QStringLiteral("cover"),
+-        QStringLiteral("instrumental"), QStringLiteral("remaster"), QStringLiteral("acoustic"),
+-        QStringLiteral("karaoke"),      QStringLiteral("demo"),
+-    };
+-    for (const QString &term : versionTerms) {
+-        if (hasVersionTerm(candidateTitle, term) && !hasVersionTerm(title, term))
+-            score -= 18.0;
+-    }
+-    return score;
+-}
+-
+-QVariantMap candidateWithIdentity(const QString &provider, const QString &id, const QString &title,
+-                                  const QString &artist, const QString &album, double duration)
+-{
+-    QVariantMap candidate;
+-    candidate.insert(QStringLiteral("provider"), provider);
+-    candidate.insert(QStringLiteral("id"), id);
+-    candidate.insert(QStringLiteral("title"), title);
+-    candidate.insert(QStringLiteral("artist"), artist);
+-    candidate.insert(QStringLiteral("album"), album);
+-    candidate.insert(QStringLiteral("duration"), duration);
+-    return candidate;
+-}
+-
+-QString candidateIdentity(const QVariantMap &candidate)
+-{
+-    return candidate.value(QStringLiteral("provider")).toString() + QLatin1Char('\n') +
+-           candidate.value(QStringLiteral("id")).toString();
+-}
+-
+-bool isMetadataLine(const QString &line)
+-{
+-    static const QRegularExpression metadata(QStringLiteral(R"(^\[(?:ar|ti|al|by|re|ve|offset)\s*:)"),
+-                                             QRegularExpression::CaseInsensitiveOption);
+-    return metadata.match(line.trimmed()).hasMatch();
+-}
+-
+-bool looksLikeMalformedTimestamp(const QString &line)
+-{
+-    static const QRegularExpression malformed(QStringLiteral(R"(^\[\d+\s*:[^\]]+\])"));
+-    return malformed.match(line.trimmed()).hasMatch();
+-}
+-
+-} // namespace
+-
+-Lyrics::Lyrics(QObject *parent) : QObject(parent)
+-{
+-    m_loadDebounce.setSingleShot(true);
+-    m_loadDebounce.setInterval(kLoadDebounceMs);
+-    connect(&m_loadDebounce, &QTimer::timeout, this, [this]() {
+-        if (m_title.isEmpty())
+-            return;
+-        startLoad(m_generation, m_forceNetwork);
+-    });
+-}
+-
+-void Lyrics::setNetworkAccessManager(QNetworkAccessManager *manager)
+-{
+-    ++m_generation;
+-    cancelInFlight();
+-    m_manager = manager ? manager : &m_defaultManager;
+-}
+-
+-void Lyrics::setOffsetMs(double offsetMs)
+-{
+-    if (!std::isfinite(offsetMs) || qFuzzyCompare(m_offsetMs + 1.0, offsetMs + 1.0))
+-        return;
+-
+-    m_offsetMs = offsetMs;
+-    emit offsetMsChanged();
+-    if (!m_sourceText.isEmpty())
+-        rebuildTimelineFromSource();
+-}
+-
+-void Lyrics::setTrack(const QString &artist, const QString &title, const QString &album, double duration,
+-                      const QString &playerId)
+-{
+-    const QString nextArtist = artist.trimmed();
+-    const QString nextTitle = title.trimmed();
+-    const QString nextAlbum = album.trimmed();
+-    // MPRIS can report sentinel lengths (including INT64_MAX microseconds).
+-    // Treat values outside the provider's integer-second range as unknown,
+-    // before either the request or the millisecond cache key converts them.
+-    const double nextDuration =
+-        std::isfinite(duration) && duration > 0.0 && std::round(duration) <= std::numeric_limits<int>::max()
+-            ? duration
+-            : 0.0;
+-    const QString nextPlayerId = playerId.trimmed();
+-
+-    if (m_artist == nextArtist && m_title == nextTitle && m_album == nextAlbum &&
+-        m_playerId == nextPlayerId && qFuzzyCompare(m_duration + 1.0, nextDuration + 1.0)) {
+-        return;
+-    }
+-
+-    beginGeneration();
+-    m_loadDebounce.stop();
+-    m_artist = nextArtist;
+-    m_title = nextTitle;
+-    m_album = nextAlbum;
+-    m_duration = nextDuration;
+-    m_playerId = nextPlayerId;
+-    emit trackChanged();
+-
+-    clearCandidates();
+-    clearLyrics();
+-    clearSource();
+-    setProvider({});
+-    setError({});
+-    resetProviderOutcomes();
+-
+-    if (m_title.isEmpty()) {
+-        setLoading(false);
+-        setStatus(QStringLiteral("idle"));
+-        return;
+-    }
+-
+-    m_forceNetwork = false;
+-    m_autoFallback = true;
+-    setLoading(true);
+-    setStatus(QStringLiteral("loading"));
+-    scheduleLoad();
+-}
+-
+-void Lyrics::clearTrack()
+-{
+-    if (m_artist.isEmpty() && m_title.isEmpty() && m_album.isEmpty() && m_playerId.isEmpty() && !m_loading &&
+-        !m_reply)
+-        return;
+-
+-    beginGeneration();
+-    m_loadDebounce.stop();
+-    m_artist.clear();
+-    m_title.clear();
+-    m_album.clear();
+-    m_duration = 0.0;
+-    m_playerId.clear();
+-    emit trackChanged();
+-
+-    m_forceNetwork = false;
+-    m_autoFallback = false;
+-    m_netEaseCandidates.clear();
+-    m_pendingCandidate.clear();
+-    m_netEaseCandidateIndex = 0;
+-    resetProviderOutcomes();
+-    clearCandidates();
+-    clearLyrics();
+-    clearSource();
+-    setProvider({});
+-    setError({});
+-    setLoading(false);
+-    setStatus(QStringLiteral("idle"));
+-}
+-
+-void Lyrics::refresh()
+-{
+-    if (m_title.isEmpty())
+-        return;
+-
+-    const quint64 generation = beginGeneration();
+-    m_loadDebounce.stop();
+-    m_forceNetwork = true;
+-    m_autoFallback = true;
+-    m_netEaseCandidates.clear();
+-    m_pendingCandidate.clear();
+-    m_netEaseCandidateIndex = 0;
+-    resetProviderOutcomes();
+-    clearCandidates();
+-    clearLyrics();
+-    clearSource();
+-    setProvider({});
+-    setError({});
+-    setLoading(true);
+-    setStatus(QStringLiteral("loading"));
+-    startLoad(generation, true);
+-}
+-
+-void Lyrics::requestCandidates()
+-{
+-    if (m_title.isEmpty())
+-        return;
+-
+-    const quint64 generation = beginGeneration();
+-    m_loadDebounce.stop();
+-    m_forceNetwork = true;
+-    m_autoFallback = false;
+-    m_netEaseCandidates.clear();
+-    m_pendingCandidate.clear();
+-    m_netEaseCandidateIndex = 0;
+-    resetProviderOutcomes();
+-    clearCandidates();
+-    setError({});
+-    setLoading(true);
+-    setStatus(QStringLiteral("loading"));
+-    startLrclibSearch(generation);
+-}
+-
+-void Lyrics::selectCandidate(int index)
+-{
+-    if (index < 0 || index >= m_candidates.size())
+-        return;
+-
+-    const QVariantMap candidate = m_candidates.at(index).toMap();
+-    const QString provider = candidate.value(QStringLiteral("provider")).toString();
+-    const QString id = candidate.value(QStringLiteral("id")).toString();
+-    if (provider.isEmpty() || id.isEmpty())
+-        return;
+-
+-    const quint64 generation = beginGeneration();
+-    m_loadDebounce.stop();
+-    m_forceNetwork = true;
+-    m_autoFallback = false;
+-    resetProviderOutcomes();
+-    clearLyrics();
+-    clearSource();
+-    setSelectedCandidate(candidate);
+-    setProvider(provider);
+-    setError({});
+-    setLoading(true);
+-    setStatus(QStringLiteral("loading"));
+-
+-    const QString synced = candidate.value(QStringLiteral("syncedLyrics")).toString();
+-    const QString plain = candidate.value(QStringLiteral("plainLyrics")).toString();
+-    if (!synced.isEmpty() || !plain.isEmpty()) {
+-        if (!acceptRawLyrics(provider, synced, plain, candidate, generation, true))
+-            finishError(QStringLiteral("歌词内容不可用"));
+-        return;
+-    }
+-
+-    if (provider.compare(QStringLiteral("LRCLIB"), Qt::CaseInsensitive) == 0) {
+-        startReply(QUrl(QStringLiteral("https://lrclib.net/api/get/") + id), ReplyKind::LrclibTrack,
+-                   generation);
+-    } else if (provider.compare(QStringLiteral("NetEase"), Qt::CaseInsensitive) == 0) {
+-        resetNetEaseSession();
+-        startNetEaseLyrics(candidate, generation);
+-    } else {
+-        finishError(QStringLiteral("不支持的歌词 provider"));
+-    }
+-}
+-
+-QVariantList Lyrics::parseLrc(const QString &text, double offsetMs) const
+-{
+-    QVariantList result;
+-    if (text.trimmed().isEmpty())
+-        return result;
+-
+-    double fileOffsetMs = 0.0;
+-    static const QRegularExpression offsetExpression(QStringLiteral(R"(\[offset\s*:\s*(-?\d+(?:\.\d+)?)\])"),
+-                                                     QRegularExpression::CaseInsensitiveOption);
+-    const QRegularExpressionMatch offsetMatch = offsetExpression.match(text);
+-    if (offsetMatch.hasMatch())
+-        fileOffsetMs = offsetMatch.captured(1).toDouble();
+-
+-    static const QRegularExpression timestampExpression(
+-        QStringLiteral(R"(\[(\d+):(\d{1,2})(?:[\.:](\d{1,3}))?\])"));
+-    const QStringList lines = text.split(QRegularExpression(QStringLiteral("\\r?\\n")));
+-    for (const QString &line : lines) {
+-        QList<double> timestamps;
+-        QRegularExpressionMatchIterator iterator = timestampExpression.globalMatch(line);
+-        while (iterator.hasNext()) {
+-            const QRegularExpressionMatch match = iterator.next();
+-            const double seconds = match.captured(1).toDouble() * 60.0 + match.captured(2).toDouble() +
+-                                   fractionalSeconds(match.captured(3));
+-            timestamps.append(seconds + (fileOffsetMs + offsetMs) / 1000.0);
+-        }
+-
+-        // Remove every timestamp from the original line in one operation.
+-        // This keeps match offsets valid for multi-timestamp lines.
+-        QString lyricText = line;
+-        lyricText.replace(timestampExpression, QString());
+-        lyricText = lyricText.trimmed();
+-
+-        if (!timestamps.isEmpty()) {
+-            if (lyricText.isEmpty())
+-                continue;
+-            for (const double time : timestamps)
+-                result.append(
+-                    QVariantMap{{QStringLiteral("time"), time}, {QStringLiteral("text"), lyricText}});
+-            continue;
+-        }
+-
+-        const QString trimmed = line.trimmed();
+-        if (lyricText.isEmpty() || isMetadataLine(trimmed) || looksLikeMalformedTimestamp(trimmed))
+-            continue;
+-        result.append(QVariantMap{{QStringLiteral("time"), -1.0}, {QStringLiteral("text"), lyricText}});
+-    }
+-
+-    std::stable_sort(result.begin(), result.end(), [](const QVariant &left, const QVariant &right) {
+-        const double leftTime = left.toMap().value(QStringLiteral("time"), -1.0).toDouble();
+-        const double rightTime = right.toMap().value(QStringLiteral("time"), -1.0).toDouble();
+-        const bool leftSynced = leftTime >= 0.0;
+-        const bool rightSynced = rightTime >= 0.0;
+-        if (leftSynced != rightSynced)
+-            return leftSynced;
+-        return leftSynced && leftTime < rightTime;
+-    });
+-    return result;
+-}
+-
+-int Lyrics::indexForTime(double positionSeconds) const
+-{
+-    if (!m_hasSynchronizedLyrics || !std::isfinite(positionSeconds) || positionSeconds < 0.0)
+-        return -1;
+-
+-    int syncedCount = 0;
+-    while (syncedCount < m_lyrics.size() &&
+-           m_lyrics.at(syncedCount).toMap().value(QStringLiteral("time"), -1.0).toDouble() >= 0.0) {
+-        ++syncedCount;
+-    }
+-
+-    int low = 0;
+-    int high = syncedCount;
+-    while (low < high) {
+-        const int middle = low + (high - low) / 2;
+-        const double time = m_lyrics.at(middle).toMap().value(QStringLiteral("time"), -1.0).toDouble();
+-        if (time <= positionSeconds)
+-            low = middle + 1;
+-        else
+-            high = middle;
+-    }
+-    return low - 1;
+-}
+-
+-double Lyrics::timeForIndex(int index) const
+-{
+-    if (index < 0 || index >= m_lyrics.size())
+-        return -1.0;
+-    const double time = m_lyrics.at(index).toMap().value(QStringLiteral("time"), -1.0).toDouble();
+-    return time >= 0.0 && std::isfinite(time) ? time : -1.0;
+-}
+-
+-void Lyrics::setStatus(const QString &status)
+-{
+-    if (m_status == status)
+-        return;
++    const bool statusChangedNow = m_status != status;
++    const bool lyricsChangedNow = m_lyrics != lines;
++    const bool errorChangedNow = m_error != error;
++    // Store one coherent result before notifying any observer.
+     m_status = status;
+-    emit statusChanged();
+-}
+-
+-void Lyrics::setLoading(bool loading)
+-{
+-    if (m_loading == loading)
+-        return;
+-    m_loading = loading;
+-    emit loadingChanged();
+-}
+-
+-void Lyrics::setHasLyrics(bool value)
+-{
+-    if (m_hasLyrics == value)
+-        return;
+-    m_hasLyrics = value;
+-    emit hasLyricsChanged();
+-}
+-
+-void Lyrics::setHasSynchronizedLyrics(bool value)
+-{
+-    if (m_hasSynchronizedLyrics == value)
+-        return;
+-    m_hasSynchronizedLyrics = value;
+-    emit synchronizedChanged();
+-}
+-
+-void Lyrics::setProvider(const QString &provider)
+-{
+-    if (m_provider == provider)
+-        return;
+-    m_provider = provider;
+-    emit providerChanged();
+-}
+-
+-void Lyrics::setError(const QString &error)
+-{
+-    if (m_error == error)
+-        return;
++    m_lyrics = std::move(lines);
+     m_error = error;
+-    emit errorChanged();
+-}
+-
+-void Lyrics::setSelectedCandidate(const QVariantMap &candidate)
+-{
+-    if (m_selectedCandidate == candidate)
+-        return;
+-    m_selectedCandidate = candidate;
+-    emit selectedCandidateChanged();
+-}
+-
+-void Lyrics::clearLyrics()
+-{
+-    const bool hadLines = !m_lyrics.isEmpty();
+-    m_lyrics.clear();
+-    setHasLyrics(false);
+-    setHasSynchronizedLyrics(false);
+-    if (hadLines)
++    if (statusChangedNow)
++        emit statusChanged();
++    if (lyricsChangedNow)
+         emit lyricsChanged();
++    if (errorChangedNow)
++        emit errorChanged();
+ }
+ 
+-void Lyrics::clearCandidates()
+-{
+-    if (!m_candidates.isEmpty()) {
+-        m_candidates.clear();
+-        emit candidatesChanged();
+-    }
+-    setSelectedCandidate({});
+-}
+-
+-void Lyrics::clearSource()
+-{
+-    m_sourceText.clear();
+-    m_sourceProvider.clear();
+-    m_sourceCandidate.clear();
+-}
+-
+-void Lyrics::resetProviderOutcomes()
+-{
+-    m_lrclibOutcome = ProviderOutcome::Pending;
+-    m_netEaseSearchOutcome = ProviderOutcome::Pending;
+-    m_netEaseCandidateOutcome = ProviderOutcome::Pending;
+-    m_netEaseSawValidLyricResponse = false;
+-    m_netEaseSawNoLyrics = false;
+-    m_netEaseSawParseFailure = false;
+-}
+-
+-void Lyrics::resetNetEaseSession()
+-{
+-    if (m_manager)
+-        m_manager->setCookieJar(new QNetworkCookieJar(m_manager));
+-}
++void Lyrics::clearTrack() { publish(QStringLiteral("idle"), {}); }
+ 
+-quint64 Lyrics::beginGeneration()
++void Lyrics::setMetadata(const QString &playerId, const QVariantMap &metadata)
+ {
+-    ++m_generation;
+-    cancelInFlight();
+-    return m_generation;
+-}
+-
+-void Lyrics::cancelInFlight()
+-{
+-    if (!m_reply)
++    if (playerId.isEmpty() || metadata.isEmpty()) {
++        clearTrack();
+         return;
+-
+-    QNetworkReply *reply = m_reply.data();
+-    m_reply = nullptr;
+-    reply->abort();
+-    reply->deleteLater();
+-}
+-
+-void Lyrics::scheduleLoad() { m_loadDebounce.start(); }
+-
+-void Lyrics::startLoad(quint64 generation, bool bypassCache)
+-{
+-    if (generation != m_generation || m_title.isEmpty())
+-        return;
+-
+-    if (loadLocalLyrics(generation))
+-        return;
+-    if (!bypassCache && loadCachedLyrics(generation))
+-        return;
+-
+-    m_forceNetwork = bypassCache;
+-    m_autoFallback = true;
+-    m_netEaseCandidates.clear();
+-    m_pendingCandidate.clear();
+-    m_netEaseCandidateIndex = 0;
+-    resetProviderOutcomes();
+-    startLrclibTrack(generation);
+-}
+-
+-bool Lyrics::loadLocalLyrics(quint64 generation)
+-{
+-    const QString path = localLyricsPath();
+-    if (path.isEmpty())
+-        return false;
+-
+-    QFile file(path);
+-    if (!file.open(QIODevice::ReadOnly))
+-        return false;
+-    const QString text = QString::fromUtf8(file.readAll());
+-    QVariantMap candidate =
+-        candidateWithIdentity(QStringLiteral("Local"), path, m_title, m_artist, m_album, m_duration);
+-    return acceptRawLyrics(QStringLiteral("Local"), text, {}, candidate, generation, false);
+-}
+-
+-bool Lyrics::loadCachedLyrics(quint64 generation)
+-{
+-    QFile indexFile(cacheIndexPath());
+-    if (!indexFile.open(QIODevice::ReadOnly))
+-        return false;
+-
+-    QJsonParseError parseError;
+-    const QJsonDocument indexDocument = QJsonDocument::fromJson(indexFile.readAll(), &parseError);
+-    if (parseError.error != QJsonParseError::NoError || !indexDocument.isObject())
+-        return false;
+-
+-    const QJsonObject entry = indexDocument.object().value(cacheKey()).toObject();
+-    const QString provider = entry.value(QStringLiteral("provider")).toString();
+-    const QString id = entry.value(QStringLiteral("id")).toString();
+-    if (provider.isEmpty() || id.isEmpty())
+-        return false;
+-
+-    QFile contentFile(cachePath(provider, id));
+-    if (!contentFile.open(QIODevice::ReadOnly))
+-        return false;
+-    const QJsonDocument contentDocument = QJsonDocument::fromJson(contentFile.readAll(), &parseError);
+-    if (parseError.error != QJsonParseError::NoError || !contentDocument.isObject())
+-        return false;
+-
+-    const QJsonObject content = contentDocument.object();
+-    if (content.value(QStringLiteral("version")).toInt() != 2)
+-        return false;
+-    const QString synced = content.value(QStringLiteral("syncedLyrics")).toString();
+-    const QString plain = content.value(QStringLiteral("plainLyrics")).toString();
+-    if (synced.isEmpty() && plain.isEmpty())
+-        return false;
+-
+-    QVariantMap candidate = candidateWithIdentity(
+-        provider, id, content.value(QStringLiteral("title")).toString(),
+-        content.value(QStringLiteral("artist")).toString(), content.value(QStringLiteral("album")).toString(),
+-        content.value(QStringLiteral("duration")).toDouble());
+-    candidate.insert(QStringLiteral("syncedLyrics"), synced);
+-    candidate.insert(QStringLiteral("plainLyrics"), plain);
+-    return acceptRawLyrics(provider, synced, plain, candidate, generation, false);
+-}
+-
+-bool Lyrics::acceptRawLyrics(const QString &provider, const QString &synced, const QString &plain,
+-                             const QVariantMap &candidate, quint64 generation, bool writeCache)
+-{
+-    if (generation != m_generation)
+-        return false;
+-
+-    const QString raw = synced.isEmpty() ? plain : synced;
+-    if (raw.trimmed().isEmpty())
+-        return false;
+-    const QVariantList lines = parseLrc(raw, m_offsetMs);
+-    if (lines.isEmpty())
+-        return false;
+-
+-    m_sourceText = raw;
+-    m_sourceProvider = provider;
+-    m_sourceCandidate = candidate;
+-    m_lyrics = lines;
+-
+-    bool synchronized = false;
+-    for (const QVariant &line : m_lyrics) {
+-        if (line.toMap().value(QStringLiteral("time"), -1.0).toDouble() >= 0.0) {
+-            synchronized = true;
+-            break;
+-        }
+-    }
+-    setHasLyrics(!m_lyrics.isEmpty());
+-    setHasSynchronizedLyrics(synchronized);
+-    setProvider(provider);
+-    setError({});
+-    setLoading(false);
+-    setStatus(QStringLiteral("ready"));
+-    emit lyricsChanged();
+-
+-    if (!candidate.isEmpty()) {
+-        appendCandidates({candidate});
+-        setSelectedCandidate(candidate);
+-    }
+-
+-    if (writeCache && provider.compare(QStringLiteral("Local"), Qt::CaseInsensitive) != 0)
+-        cacheLyrics(provider, candidate.value(QStringLiteral("id")).toString(), synced, plain, candidate);
+-    return true;
+-}
+-
+-void Lyrics::finishEmpty(const QString &message)
+-{
+-    Q_UNUSED(message)
+-    clearLyrics();
+-    clearSource();
+-    setProvider({});
+-    setError({});
+-    setLoading(false);
+-    setStatus(QStringLiteral("empty"));
+-}
+-
+-void Lyrics::finishError(const QString &message)
+-{
+-    clearLyrics();
+-    clearSource();
+-    setProvider({});
+-    setError(message);
+-    setLoading(false);
+-    setStatus(QStringLiteral("error"));
+-}
+-
+-void Lyrics::rebuildTimelineFromSource()
+-{
+-    const QVariantList lines = parseLrc(m_sourceText, m_offsetMs);
+-    if (lines.isEmpty())
+-        return;
+-
+-    m_lyrics = lines;
+-    bool synchronized = false;
+-    for (const QVariant &line : m_lyrics) {
+-        if (line.toMap().value(QStringLiteral("time"), -1.0).toDouble() >= 0.0) {
+-            synchronized = true;
+-            break;
+-        }
+-    }
+-    setHasLyrics(true);
+-    setHasSynchronizedLyrics(synchronized);
+-    emit lyricsChanged();
+-}
+-
+-void Lyrics::startLrclibTrack(quint64 generation)
+-{
+-    startReply(lrclibUrl(false), ReplyKind::LrclibTrack, generation);
+-}
+-
+-void Lyrics::startLrclibSearch(quint64 generation)
+-{
+-    startReply(lrclibUrl(true), ReplyKind::LrclibSearch, generation);
+-}
+-
+-void Lyrics::startNetEaseSearch(quint64 generation)
+-{
+-    if (generation != m_generation)
+-        return;
+-
+-    // NetEase may reject a request carrying stale cookies. Start every
+-    // search/fallback chain with a fresh jar, while keeping it alive for the
+-    // subsequent lyric requests for the selected candidates.
+-    resetNetEaseSession();
+-    startReply(netEaseSearchUrl(), ReplyKind::NetEaseSearch, generation);
+-}
+-
+-void Lyrics::startNetEaseLyrics(const QVariantMap &candidate, quint64 generation)
+-{
+-    const QString id = candidate.value(QStringLiteral("id")).toString();
+-    if (id.isEmpty()) {
+-        m_netEaseCandidateOutcome = ProviderOutcome::CandidateRejected;
+-        tryNextNetEaseCandidate(generation);
+-        return;
+-    }
+-    m_pendingCandidate = candidate;
+-    startReply(netEaseLyricsUrl(id), ReplyKind::NetEaseLyrics, generation);
+-}
+-
+-void Lyrics::startReply(const QUrl &url, ReplyKind kind, quint64 generation)
+-{
+-    if (generation != m_generation)
+-        return;
+-
+-    if (m_reply) {
+-        QNetworkReply *oldReply = m_reply.data();
+-        m_reply = nullptr;
+-        oldReply->abort();
+-        oldReply->deleteLater();
+-    }
+-
+-    QNetworkRequest request(url);
+-    request.setAttribute(QNetworkRequest::CacheLoadControlAttribute, QNetworkRequest::AlwaysNetwork);
+-    request.setRawHeader("Accept", "application/json");
+-    request.setRawHeader("Cache-Control", "no-cache, no-store");
+-    request.setRawHeader("Pragma", "no-cache");
+-    request.setRawHeader("Connection", "close");
+-    if (url.host().contains(QStringLiteral("music.163.com"))) {
+-        request.setRawHeader("User-Agent", kNetEaseUserAgent);
+-        request.setRawHeader("Referer", "https://music.163.com/");
+-    } else {
+-        request.setRawHeader("User-Agent", "Clavis/lyrics");
+-    }
+-
+-    QNetworkReply *reply = m_manager->get(request);
+-    m_reply = reply;
+-    QPointer<QNetworkReply> guardedReply = reply;
+-    connect(reply, &QNetworkReply::finished, this, [this, guardedReply, kind, generation]() {
+-        if (guardedReply)
+-            handleReply(guardedReply.data(), kind, generation);
+-    });
+-}
+-
+-void Lyrics::handleReply(QNetworkReply *reply, ReplyKind kind, quint64 generation)
+-{
+-    if (!reply)
+-        return;
+-    if (generation != m_generation || m_reply != reply) {
+-        // A generation change or replacement already transferred deletion
+-        // ownership to cancelInFlight()/startReply(). abort() may emit
+-        // finished() synchronously, so this callback must not delete or read
+-        // that reply a second time.
+-        return;
+-    }
+-
+-    m_reply = nullptr;
+-
+-    const bool requestFailed = reply->error() != QNetworkReply::NoError;
+-    const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+-    const QByteArray body = reply->readAll();
+-    reply->deleteLater();
+-
+-    const bool httpFailure = statusCode >= 400;
+-    const bool notFound = statusCode == 404;
+-
+-    if (requestFailed || httpFailure) {
+-        switch (kind) {
+-        case ReplyKind::LrclibTrack:
+-            m_lrclibOutcome = notFound ? ProviderOutcome::NotFound : ProviderOutcome::TransportError;
+-            if (m_autoFallback)
+-                startNetEaseSearch(generation);
+-            else if (notFound)
+-                finishEmpty();
+-            else
+-                finishError(QStringLiteral("LRCLIB 请求失败"));
+-            return;
+-        case ReplyKind::LrclibSearch:
+-            m_lrclibOutcome = notFound ? ProviderOutcome::NotFound : ProviderOutcome::TransportError;
+-            startNetEaseSearch(generation);
+-            return;
+-        case ReplyKind::NetEaseSearch:
+-            m_netEaseSearchOutcome = notFound ? ProviderOutcome::NotFound : ProviderOutcome::TransportError;
+-            if (m_autoFallback) {
+-                m_netEaseCandidateIndex = 0;
+-                tryNextNetEaseCandidate(generation);
+-            } else if (notFound) {
+-                finishEmpty();
+-            } else {
+-                finishError(QStringLiteral("NetEase 搜索请求失败"));
+-            }
+-            return;
+-        case ReplyKind::NetEaseLyrics:
+-            m_netEaseCandidateOutcome =
+-                notFound ? ProviderOutcome::NoLyrics : ProviderOutcome::TransportError;
+-            if (notFound)
+-                m_netEaseSawNoLyrics = true;
+-            if (m_autoFallback)
+-                tryNextNetEaseCandidate(generation);
+-            else if (notFound)
+-                finishEmpty();
+-            else
+-                finishError(QStringLiteral("NetEase 歌词请求失败"));
+-            return;
+-        }
+-    }
+-
+-    QJsonParseError parseError;
+-    const QJsonDocument document = QJsonDocument::fromJson(body, &parseError);
+-    const bool validJson = parseError.error == QJsonParseError::NoError;
+-    if (!validJson) {
+-        switch (kind) {
+-        case ReplyKind::LrclibTrack:
+-            m_lrclibOutcome = ProviderOutcome::InvalidResponse;
+-            if (m_autoFallback)
+-                startNetEaseSearch(generation);
+-            else
+-                finishError(QStringLiteral("LRCLIB 返回了无效响应"));
+-            return;
+-        case ReplyKind::LrclibSearch:
+-            m_lrclibOutcome = ProviderOutcome::InvalidResponse;
+-            startNetEaseSearch(generation);
+-            return;
+-        case ReplyKind::NetEaseSearch:
+-            m_netEaseSearchOutcome = ProviderOutcome::InvalidResponse;
+-            if (m_autoFallback) {
+-                m_netEaseCandidateIndex = 0;
+-                tryNextNetEaseCandidate(generation);
+-            } else {
+-                finishError(QStringLiteral("NetEase 搜索返回了无效响应"));
+-            }
+-            return;
+-        case ReplyKind::NetEaseLyrics:
+-            m_netEaseCandidateOutcome = ProviderOutcome::InvalidResponse;
+-            if (m_autoFallback)
+-                tryNextNetEaseCandidate(generation);
+-            else
+-                finishError(QStringLiteral("NetEase 歌词返回了无效响应"));
+-            return;
+-        }
+-    }
+-
+-    switch (kind) {
+-    case ReplyKind::LrclibTrack:
+-        if (!document.isObject()) {
+-            m_lrclibOutcome = ProviderOutcome::InvalidResponse;
+-            if (m_autoFallback)
+-                startNetEaseSearch(generation);
+-            else
+-                finishError(QStringLiteral("LRCLIB 返回了无效响应"));
+-            return;
+-        }
+-        if (handleLrclibTrack(document.object(), generation)) {
+-            return;
+-        }
+-        if (m_autoFallback) {
+-            startNetEaseSearch(generation);
+-        } else if (m_lrclibOutcome == ProviderOutcome::NotFound) {
+-            finishEmpty();
+-        } else {
+-            finishError(QStringLiteral("LRCLIB 歌词内容不可用"));
+-        }
+-        return;
+-
+-    case ReplyKind::LrclibSearch:
+-        if (!document.isArray()) {
+-            m_lrclibOutcome = ProviderOutcome::InvalidResponse;
+-        } else {
+-            handleLrclibSearch(document, generation);
+-        }
+-        startNetEaseSearch(generation);
+-        return;
+-
+-    case ReplyKind::NetEaseSearch:
+-        if (document.isObject())
+-            handleNetEaseSearch(document, generation);
+-        else
+-            m_netEaseSearchOutcome = ProviderOutcome::InvalidResponse;
+-        if (m_autoFallback) {
+-            m_netEaseCandidateIndex = 0;
+-            tryNextNetEaseCandidate(generation);
+-        } else {
+-            if (m_netEaseSearchOutcome == ProviderOutcome::TransportError ||
+-                m_netEaseSearchOutcome == ProviderOutcome::InvalidResponse) {
+-                finishError(QStringLiteral("NetEase 搜索不可用"));
+-            } else if (m_candidates.isEmpty()) {
+-                finishEmpty();
+-            } else {
+-                setLoading(false);
+-                setStatus(QStringLiteral("empty"));
+-            }
+-        }
+-        return;
+-
+-    case ReplyKind::NetEaseLyrics:
+-        if (!document.isObject()) {
+-            m_netEaseCandidateOutcome = ProviderOutcome::InvalidResponse;
+-        } else if (handleNetEaseLyrics(document.object(), generation)) {
+-            return;
+-        }
+-        if (m_autoFallback)
+-            tryNextNetEaseCandidate(generation);
+-        else if (m_netEaseCandidateOutcome == ProviderOutcome::NoLyrics)
+-            finishEmpty();
+-        else
+-            finishError(QStringLiteral("NetEase 歌词内容不可用"));
+-        return;
+-    }
+-}
+-
+-bool Lyrics::handleLrclibTrack(const QJsonObject &json, quint64 generation)
+-{
+-    const QString synced =
+-        firstString(json, {QStringLiteral("syncedLyrics"), QStringLiteral("synced_lyrics")});
+-    const QString plain = firstString(json, {QStringLiteral("plainLyrics"), QStringLiteral("plain_lyrics")});
+-    if (synced.isEmpty() && plain.isEmpty()) {
+-        m_lrclibOutcome = ProviderOutcome::NotFound;
+-        return false;
+     }
+-
+-    QVariantMap candidate = m_selectedCandidate;
+-    const QString id = jsonId(json.value(QStringLiteral("id")));
+-    if (candidate.value(QStringLiteral("provider")).toString().isEmpty())
+-        candidate.insert(QStringLiteral("provider"), QStringLiteral("LRCLIB"));
+-    if (candidate.value(QStringLiteral("id")).toString().isEmpty() && !id.isEmpty())
+-        candidate.insert(QStringLiteral("id"), id);
+-    candidate.insert(QStringLiteral("title"),
+-                     firstString(json, {QStringLiteral("trackName"), QStringLiteral("name")}));
+-    candidate.insert(QStringLiteral("artist"),
+-                     firstString(json, {QStringLiteral("artistName"), QStringLiteral("artist")}));
+-    candidate.insert(QStringLiteral("album"),
+-                     firstString(json, {QStringLiteral("albumName"), QStringLiteral("album")}));
+-    candidate.insert(QStringLiteral("duration"), jsonDurationSeconds(json));
+-    candidate.insert(QStringLiteral("syncedLyrics"), synced);
+-    candidate.insert(QStringLiteral("plainLyrics"), plain);
+-
+-    const bool accepted =
+-        acceptRawLyrics(QStringLiteral("LRCLIB"), synced, plain, candidate, generation, true);
+-    m_lrclibOutcome = accepted ? ProviderOutcome::Success : ProviderOutcome::ParseFailure;
+-    return accepted;
+-}
+-
+-void Lyrics::handleLrclibSearch(const QJsonDocument &document, quint64 generation)
+-{
+-    if (generation != m_generation || !document.isArray())
+-        return;
+-    const QVariantList candidates = parseLrclibCandidates(document);
+-    appendCandidates(candidates);
+-    m_lrclibOutcome = candidates.isEmpty() ? ProviderOutcome::NotFound : ProviderOutcome::Success;
+-}
+-
+-void Lyrics::handleNetEaseSearch(const QJsonDocument &document, quint64 generation)
+-{
+-    if (generation != m_generation)
+-        return;
+-    const QJsonObject result = document.object().value(QStringLiteral("result")).toObject();
+-    const QJsonValue songsValue = result.value(QStringLiteral("songs"));
+-    if (!songsValue.isArray()) {
+-        m_netEaseSearchOutcome = ProviderOutcome::InvalidResponse;
++    const auto value = metadata.value(QStringLiteral("xesam:asText"));
++    if (!value.isValid()) {
++        publish(QStringLiteral("empty"), {});
+         return;
+     }
+-
+-    m_netEaseCandidates = parseNetEaseCandidates(document);
+-    appendCandidates(m_netEaseCandidates);
+-    if (songsValue.toArray().isEmpty())
+-        m_netEaseSearchOutcome = ProviderOutcome::NotFound;
+-    else if (m_netEaseCandidates.isEmpty())
+-        m_netEaseSearchOutcome = ProviderOutcome::CandidateRejected;
+-    else
+-        m_netEaseSearchOutcome = ProviderOutcome::Success;
+-}
+-
+-bool Lyrics::handleNetEaseLyrics(const QJsonObject &json, quint64 generation)
+-{
+-    const QJsonValue lrcValue = json.value(QStringLiteral("lrc"));
+-    const QJsonValue translatedValue = json.value(QStringLiteral("tlyric"));
+-    if ((!lrcValue.isUndefined() && !lrcValue.isObject()) ||
+-        (!translatedValue.isUndefined() && !translatedValue.isObject()) ||
+-        (lrcValue.isUndefined() && translatedValue.isUndefined())) {
+-        m_netEaseCandidateOutcome = ProviderOutcome::InvalidResponse;
+-        return false;
+-    }
+-
+-    m_netEaseSawValidLyricResponse = true;
+-    const QJsonObject lrc = json.value(QStringLiteral("lrc")).toObject();
+-    const QJsonObject translated = json.value(QStringLiteral("tlyric")).toObject();
+-    const QString synced = firstString(lrc, {QStringLiteral("lyric")});
+-    const QString plain = synced.isEmpty() ? firstString(translated, {QStringLiteral("lyric")}) : QString();
+-    if (synced.isEmpty() && plain.isEmpty()) {
+-        m_netEaseCandidateOutcome = ProviderOutcome::NoLyrics;
+-        m_netEaseSawNoLyrics = true;
+-        return false;
+-    }
+-
+-    const bool accepted =
+-        acceptRawLyrics(QStringLiteral("NetEase"), synced, plain, m_pendingCandidate, generation, true);
+-    m_netEaseCandidateOutcome = accepted ? ProviderOutcome::Success : ProviderOutcome::ParseFailure;
+-    if (!accepted)
+-        m_netEaseSawParseFailure = true;
+-    return accepted;
+-}
+-
+-void Lyrics::tryNextNetEaseCandidate(quint64 generation)
+-{
+-    if (generation != m_generation)
++    // MPRIS specifies a string. Do not stringify arrays, numbers or provider payloads.
++    if (value.metaType().id() != QMetaType::QString) {
++        publish(QStringLiteral("error"), {}, tr("Invalid player lyrics"));
+         return;
+-
+-    while (m_netEaseCandidateIndex < m_netEaseCandidates.size()) {
+-        const QVariantMap candidate = m_netEaseCandidates.at(m_netEaseCandidateIndex++).toMap();
+-        if (candidate.value(QStringLiteral("score")).toDouble() < 0.0)
+-            continue;
+-        startNetEaseLyrics(candidate, generation);
+-        return;
+-    }
+-
+-    if (m_netEaseSearchOutcome == ProviderOutcome::TransportError ||
+-        m_netEaseSearchOutcome == ProviderOutcome::InvalidResponse) {
+-        finishError(QStringLiteral("NetEase 搜索不可用"));
+-    } else if (m_lrclibOutcome == ProviderOutcome::TransportError ||
+-               m_lrclibOutcome == ProviderOutcome::InvalidResponse ||
+-               m_lrclibOutcome == ProviderOutcome::ParseFailure) {
+-        finishError(QStringLiteral("歌词服务返回了无效内容"));
+-    } else if (!m_netEaseCandidates.isEmpty() && !m_netEaseSawNoLyrics && !m_netEaseSawValidLyricResponse &&
+-               (m_netEaseCandidateOutcome == ProviderOutcome::TransportError ||
+-                m_netEaseCandidateOutcome == ProviderOutcome::InvalidResponse || m_netEaseSawParseFailure)) {
+-        finishError(QStringLiteral("NetEase 歌词请求失败"));
+-    } else {
+-        // A valid search with no lyrics is a normal not-found result, even if
+-        // LRCLIB previously returned HTTP 404 or a candidate was rejected.
+-        finishEmpty();
+-    }
+-}
+-
+-void Lyrics::appendCandidates(const QVariantList &candidates)
+-{
+-    bool changed = false;
+-    for (const QVariant &value : candidates) {
+-        const QVariantMap candidate = value.toMap();
+-        if (candidate.value(QStringLiteral("provider")).toString().isEmpty() ||
+-            candidate.value(QStringLiteral("id")).toString().isEmpty()) {
+-            continue;
+-        }
+-
+-        const QString identity = candidateIdentity(candidate);
+-        int existingIndex = -1;
+-        for (int i = 0; i < m_candidates.size(); ++i) {
+-            if (candidateIdentity(m_candidates.at(i).toMap()) == identity) {
+-                existingIndex = i;
+-                break;
+-            }
+-        }
+-        if (existingIndex < 0) {
+-            m_candidates.append(candidate);
+-            changed = true;
+-        } else if (m_candidates.at(existingIndex).toMap() != candidate) {
+-            m_candidates[existingIndex] = candidate;
+-            changed = true;
+-        }
+-    }
+-    if (changed)
+-        emit candidatesChanged();
+-}
+-
+-QVariantList Lyrics::parseLrclibCandidates(const QJsonDocument &document) const
+-{
+-    QVariantList result;
+-    if (!document.isArray())
+-        return result;
+-
+-    for (const QJsonValue &value : document.array()) {
+-        const QJsonObject item = value.toObject();
+-        const QString id = jsonId(item.value(QStringLiteral("id")));
+-        const QString synced =
+-            firstString(item, {QStringLiteral("syncedLyrics"), QStringLiteral("synced_lyrics")});
+-        const QString plain =
+-            firstString(item, {QStringLiteral("plainLyrics"), QStringLiteral("plain_lyrics")});
+-        if (id.isEmpty() || (synced.isEmpty() && plain.isEmpty()))
+-            continue;
+-
+-        QVariantMap candidate =
+-            candidateWithIdentity(QStringLiteral("LRCLIB"), id,
+-                                  firstString(item, {QStringLiteral("trackName"), QStringLiteral("name")}),
+-                                  firstString(item, {QStringLiteral("artistName"), QStringLiteral("artist")}),
+-                                  firstString(item, {QStringLiteral("albumName"), QStringLiteral("album")}),
+-                                  jsonDurationSeconds(item));
+-        candidate.insert(QStringLiteral("syncedLyrics"), synced);
+-        candidate.insert(QStringLiteral("plainLyrics"), plain);
+-        result.append(candidate);
+-    }
+-    return result;
+-}
+-
+-QVariantList Lyrics::parseNetEaseCandidates(const QJsonDocument &document) const
+-{
+-    QVariantList result;
+-    if (!document.isObject())
+-        return result;
+-
+-    const QJsonArray songs =
+-        document.object().value(QStringLiteral("result")).toObject().value(QStringLiteral("songs")).toArray();
+-    for (const QJsonValue &value : songs) {
+-        const QJsonObject item = value.toObject();
+-        const QString id = jsonId(item.value(QStringLiteral("id")));
+-        if (id.isEmpty())
+-            continue;
+-
+-        QStringList artistNames;
+-        const QJsonArray artists = item.value(QStringLiteral("artists")).toArray();
+-        for (const QJsonValue &artist : artists)
+-            artistNames.append(artist.toObject().value(QStringLiteral("name")).toString());
+-        if (artistNames.isEmpty()) {
+-            const QJsonObject artist = item.value(QStringLiteral("ar")).toObject();
+-            if (!artist.isEmpty())
+-                artistNames.append(artist.value(QStringLiteral("name")).toString());
+-        }
+-
+-        const QJsonObject albumObject = item.value(QStringLiteral("album")).toObject();
+-        const QJsonObject alternateAlbum = item.value(QStringLiteral("al")).toObject();
+-        const QString album = firstString(albumObject, {QStringLiteral("name")}).isEmpty()
+-                                  ? firstString(alternateAlbum, {QStringLiteral("name")})
+-                                  : firstString(albumObject, {QStringLiteral("name")});
+-        QVariantMap candidate = candidateWithIdentity(
+-            QStringLiteral("NetEase"), id, item.value(QStringLiteral("name")).toString(),
+-            artistNames.join(QStringLiteral(", ")), album, jsonDurationSeconds(item));
+-        const double score = candidateScore(m_artist, m_title, m_album, m_duration, candidate);
+-        if (score < 0.0)
+-            continue;
+-        candidate.insert(QStringLiteral("score"), score);
+-        result.append(candidate);
+     }
+-
+-    std::stable_sort(result.begin(), result.end(), [](const QVariant &left, const QVariant &right) {
+-        return left.toMap().value(QStringLiteral("score")).toDouble() >
+-               right.toMap().value(QStringLiteral("score")).toDouble();
+-    });
+-    if (result.size() > kNetEaseSearchLimit)
+-        result = result.mid(0, kNetEaseSearchLimit);
+-    return result;
+-}
+-
+-void Lyrics::cacheLyrics(const QString &provider, const QString &id, const QString &synced,
+-                         const QString &plain, const QVariantMap &candidate)
+-{
+-    if (id.isEmpty() || (synced.isEmpty() && plain.isEmpty()) ||
+-        provider.compare(QStringLiteral("Local"), Qt::CaseInsensitive) == 0)
+-        return;
+-
+-    const QString path = cachePath(provider, id);
+-    if (path.isEmpty() || !QDir().mkpath(QFileInfo(path).absolutePath()))
++    const QString text = value.toString();
++    constexpr qsizetype maximumUnits = 512 * 1024;
++    if (text.size() > maximumUnits || !text.isValidUtf16() || text.contains(QChar::Null)) {
++        publish(QStringLiteral("error"), {}, tr("Invalid player lyrics"));
+         return;
+-
+-    QJsonObject content{
+-        {QStringLiteral("version"), 2},
+-        {QStringLiteral("provider"), provider},
+-        {QStringLiteral("id"), id},
+-        {QStringLiteral("artist"), candidate.value(QStringLiteral("artist")).toString()},
+-        {QStringLiteral("title"), candidate.value(QStringLiteral("title")).toString()},
+-        {QStringLiteral("album"), candidate.value(QStringLiteral("album")).toString()},
+-        {QStringLiteral("duration"), candidate.value(QStringLiteral("duration")).toDouble()},
+-        {QStringLiteral("syncedLyrics"), synced},
+-        {QStringLiteral("plainLyrics"), plain},
+-    };
+-
+-    QSaveFile contentFile(path);
+-    if (contentFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+-        const QByteArray bytes = QJsonDocument(content).toJson(QJsonDocument::Compact);
+-        contentFile.write(bytes);
+-        contentFile.commit();
+-    }
+-
+-    QJsonObject index;
+-    QFile indexFile(cacheIndexPath());
+-    if (indexFile.open(QIODevice::ReadOnly)) {
+-        QJsonParseError parseError;
+-        const QJsonDocument document = QJsonDocument::fromJson(indexFile.readAll(), &parseError);
+-        if (parseError.error == QJsonParseError::NoError && document.isObject())
+-            index = document.object();
+     }
+-    index.insert(cacheKey(), QJsonObject{
+-                                 {QStringLiteral("provider"), provider},
+-                                 {QStringLiteral("id"), id},
+-                                 {QStringLiteral("duration"), m_duration},
+-                             });
+-
+-    QDir().mkpath(cacheDirectory());
+-    QSaveFile indexOutput(cacheIndexPath());
+-    if (indexOutput.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+-        const QByteArray bytes = QJsonDocument(index).toJson(QJsonDocument::Compact);
+-        indexOutput.write(bytes);
+-        indexOutput.commit();
++    QVariantList lines;
++    static const QRegularExpression breaks(QStringLiteral("\\r\\n|[\\r\\n]"));
++    for (const QString &line : text.split(breaks)) {
++        if (!line.trimmed().isEmpty())
++            lines.append(QVariantMap{{QStringLiteral("text"), line}});
+     }
+-}
+-
+-QString Lyrics::cacheDirectory() const
+-{
+-    const QByteArray configured = qgetenv("XDG_CACHE_HOME");
+-    const QString base =
+-        configured.isEmpty() ? QDir::homePath() + QStringLiteral("/.cache") : QString::fromUtf8(configured);
+-    return QDir::cleanPath(base + QStringLiteral("/clavis/lyrics/v2"));
+-}
+-
+-QString Lyrics::cacheIndexPath() const { return cacheDirectory() + QStringLiteral("/index.json"); }
+-
+-QString Lyrics::cachePath(const QString &provider, const QString &id) const
+-{
+-    if (provider.isEmpty() || id.isEmpty())
+-        return {};
+-    const QString providerPart = sanitizePathPart(provider);
+-    const QString idPart = sanitizePathPart(id);
+-    if (providerPart.isEmpty() || idPart.isEmpty())
+-        return {};
+-    return cacheDirectory() + QLatin1Char('/') + providerPart + QLatin1Char('/') + idPart +
+-           QStringLiteral(".json");
+-}
+-
+-QString Lyrics::cacheKey() const
+-{
+-    const QByteArray identity =
+-        (normalized(m_artist) + QLatin1Char('\n') + normalized(m_title) + QLatin1Char('\n') +
+-         normalized(m_album) + QLatin1Char('\n') + QString::number(qRound64(m_duration * 1000.0)))
+-            .toUtf8();
+-    return QString::fromLatin1(QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex());
+-}
+-
+-QString Lyrics::localDirectory() const
+-{
+-    QString directory = QString::fromUtf8(qgetenv("CLAVIS_LYRICS_DIR"));
+-    if (directory.isEmpty()) {
+-        const QByteArray dataHome = qgetenv("XDG_DATA_HOME");
+-        const QString base = dataHome.isEmpty() ? QDir::homePath() + QStringLiteral("/.local/share")
+-                                                : QString::fromUtf8(dataHome);
+-        directory = base + QStringLiteral("/clavis/lyrics");
+-    }
+-
+-    if (directory == QStringLiteral("~"))
+-        directory = QDir::homePath();
+-    else if (directory.startsWith(QStringLiteral("~/")))
+-        directory.replace(0, 1, QDir::homePath());
+-    return QDir::cleanPath(directory);
+-}
+-
+-QString Lyrics::localLyricsPath() const
+-{
+-    if (m_title.isEmpty())
+-        return {};
+-    const QString directory = localDirectory();
+-    if (!QDir(directory).exists())
+-        return {};
+-    return findLocalLyricsPath(directory);
+-}
+-
+-QString Lyrics::findLocalLyricsPath(const QString &directory) const
+-{
+-    const QString artistPart = sanitizePathPart(m_artist);
+-    const QString titlePart = sanitizePathPart(m_title);
+-    const QString canonicalBase =
+-        artistPart.isEmpty() ? titlePart : artistPart + QStringLiteral(" - ") + titlePart;
+-    const QString titleOnlyBase = titlePart;
+-    const QStringList desired = {canonicalBase, titleOnlyBase};
+-
+-    const QDir root(directory);
+-    const QStringList directFiles = root.entryList(QDir::Files, QDir::Name);
+-    for (const QString &desiredBase : desired) {
+-        if (desiredBase.isEmpty())
+-            continue;
+-        const QString wanted = comparable(desiredBase);
+-        for (const QString &fileName : directFiles) {
+-            const QFileInfo info(root.filePath(fileName));
+-            if (info.suffix().compare(QStringLiteral("lrc"), Qt::CaseInsensitive) != 0)
+-                continue;
+-            if (comparable(info.completeBaseName()) == wanted)
+-                return info.absoluteFilePath();
+-        }
+-    }
+-
+-    QDirIterator iterator(directory, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+-    QString fallback;
+-    while (iterator.hasNext()) {
+-        const QString path = iterator.next();
+-        const QFileInfo info(path);
+-        if (info.suffix().compare(QStringLiteral("lrc"), Qt::CaseInsensitive) != 0)
+-            continue;
+-        const QString base = comparable(info.completeBaseName());
+-        if (base == comparable(canonicalBase))
+-            return info.absoluteFilePath();
+-        if (fallback.isEmpty() && base == comparable(titleOnlyBase))
+-            fallback = info.absoluteFilePath();
+-        if (fallback.isEmpty() && !artistPart.isEmpty() && base.contains(comparable(artistPart)) &&
+-            base.contains(comparable(titlePart)))
+-            fallback = info.absoluteFilePath();
+-    }
+-    return fallback;
+-}
+-
+-QUrl Lyrics::lrclibUrl(bool search) const
+-{
+-    QUrl url(QStringLiteral("https://lrclib.net/api/") +
+-             (search ? QStringLiteral("search") : QStringLiteral("get")));
+-    QUrlQuery query;
+-    query.addQueryItem(QStringLiteral("track_name"), m_title);
+-    query.addQueryItem(QStringLiteral("artist_name"), m_artist);
+-    if (!m_album.isEmpty())
+-        query.addQueryItem(QStringLiteral("album_name"), m_album);
+-    if (m_duration > 0.0)
+-        query.addQueryItem(QStringLiteral("duration"), QString::number(qRound(m_duration)));
+-    url.setQuery(query);
+-    return url;
+-}
+-
+-QUrl Lyrics::netEaseSearchUrl() const
+-{
+-    QUrl url(QStringLiteral("https://music.163.com/api/search/get"));
+-    QUrlQuery query;
+-    const QString searchText = m_artist.isEmpty() ? m_title : m_title + QLatin1Char(' ') + m_artist;
+-    query.addQueryItem(QStringLiteral("s"), searchText);
+-    query.addQueryItem(QStringLiteral("type"), QStringLiteral("1"));
+-    query.addQueryItem(QStringLiteral("limit"), QString::number(kNetEaseSearchLimit));
+-    url.setQuery(query);
+-    return url;
+-}
+-
+-QUrl Lyrics::netEaseLyricsUrl(const QString &id) const
+-{
+-    QUrl url(QStringLiteral("https://music.163.com/api/song/lyric"));
+-    QUrlQuery query;
+-    query.addQueryItem(QStringLiteral("id"), id);
+-    // Request the lyric body regardless of its version. Sending lv=1 can
+-    // return an empty lyric for tracks whose current lyric version is 1.
+-    query.addQueryItem(QStringLiteral("lv"), QStringLiteral("-1"));
+-    query.addQueryItem(QStringLiteral("kv"), QStringLiteral("1"));
+-    query.addQueryItem(QStringLiteral("tv"), QStringLiteral("-1"));
+-    url.setQuery(query);
+-    return url;
++    const QString status = lines.isEmpty() ? QStringLiteral("empty") : QStringLiteral("ready");
++    publish(status, std::move(lines));
+ }
+diff --git a/core/plugin/lyrics/src/lyrics.h b/core/plugin/lyrics/src/lyrics.h
+index 9c8c8e1..1992c61 100644
+--- a/core/plugin/lyrics/src/lyrics.h
++++ b/core/plugin/lyrics/src/lyrics.h
+@@ -1,201 +1,42 @@
+ #pragma once
+ 
+-#include <QJsonDocument>
+-#include <QJsonObject>
+-#include <QNetworkAccessManager>
+-#include <QNetworkReply>
+ #include <QObject>
+-#include <QPointer>
+-#include <QTimer>
+-#include <QUrl>
+ #include <QVariantList>
+ #include <QVariantMap>
+ #include <QtQml/qqmlregistration.h>
+ 
++// Player-owned plain text from the standard MPRIS Metadata["xesam:asText"].
++// No local file lookup, cache, provider search, network transport or LRC timeline.
+ class Lyrics : public QObject {
+     Q_OBJECT
+     QML_NAMED_ELEMENT(Lyrics)
+     QML_SINGLETON
+ 
+     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+-    Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
+-    Q_PROPERTY(bool hasLyrics READ hasLyrics NOTIFY hasLyricsChanged)
+-    Q_PROPERTY(bool hasSynchronizedLyrics READ hasSynchronizedLyrics NOTIFY synchronizedChanged)
++    Q_PROPERTY(bool hasLyrics READ hasLyrics NOTIFY lyricsChanged)
+     Q_PROPERTY(QVariantList lyrics READ lyrics NOTIFY lyricsChanged)
+-    Q_PROPERTY(QVariantList candidates READ candidates NOTIFY candidatesChanged)
+-    Q_PROPERTY(QVariantMap selectedCandidate READ selectedCandidate NOTIFY selectedCandidateChanged)
+-    Q_PROPERTY(QString provider READ provider NOTIFY providerChanged)
+     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
+-    Q_PROPERTY(double offsetMs READ offsetMs WRITE setOffsetMs NOTIFY offsetMsChanged)
+-    Q_PROPERTY(QString trackArtist READ trackArtist NOTIFY trackChanged)
+-    Q_PROPERTY(QString trackTitle READ trackTitle NOTIFY trackChanged)
+-    Q_PROPERTY(QString trackAlbum READ trackAlbum NOTIFY trackChanged)
+-    Q_PROPERTY(double trackDuration READ trackDuration NOTIFY trackChanged)
+-    Q_PROPERTY(QString trackPlayerId READ trackPlayerId NOTIFY trackChanged)
+ 
+   public:
+-    explicit Lyrics(QObject *parent = nullptr);
+-
+-    // Tests and embedders may provide a deterministic HTTP transport before
+-    // starting a request. The QML singleton keeps the default manager.
+-    void setNetworkAccessManager(QNetworkAccessManager *manager);
++    explicit Lyrics(QObject *parent = nullptr) : QObject(parent) {}
+ 
+     QString status() const { return m_status; }
+-    bool loading() const { return m_loading; }
+-    bool hasLyrics() const { return m_hasLyrics; }
+-    bool hasSynchronizedLyrics() const { return m_hasSynchronizedLyrics; }
++    bool hasLyrics() const { return !m_lyrics.isEmpty(); }
+     QVariantList lyrics() const { return m_lyrics; }
+-    QVariantList candidates() const { return m_candidates; }
+-    QVariantMap selectedCandidate() const { return m_selectedCandidate; }
+-    QString provider() const { return m_provider; }
+     QString error() const { return m_error; }
+-    double offsetMs() const { return m_offsetMs; }
+-    void setOffsetMs(double offsetMs);
+-
+-    QString trackArtist() const { return m_artist; }
+-    QString trackTitle() const { return m_title; }
+-    QString trackAlbum() const { return m_album; }
+-    double trackDuration() const { return m_duration; }
+-    QString trackPlayerId() const { return m_playerId; }
+ 
+-    Q_INVOKABLE void setTrack(const QString &artist, const QString &title, const QString &album = {},
+-                              double duration = 0.0, const QString &playerId = {});
++    Q_INVOKABLE void setMetadata(const QString &playerId, const QVariantMap &metadata);
+     Q_INVOKABLE void clearTrack();
+-    Q_INVOKABLE void refresh();
+-    Q_INVOKABLE void requestCandidates();
+-    Q_INVOKABLE void selectCandidate(int index);
+-    Q_INVOKABLE QVariantList parseLrc(const QString &text, double offsetMs = 0.0) const;
+-    Q_INVOKABLE int indexForTime(double positionSeconds) const;
+-    Q_INVOKABLE double timeForIndex(int index) const;
+ 
+   signals:
+     void statusChanged();
+-    void loadingChanged();
+-    void hasLyricsChanged();
+-    void synchronizedChanged();
+     void lyricsChanged();
+-    void candidatesChanged();
+-    void selectedCandidateChanged();
+-    void providerChanged();
+     void errorChanged();
+-    void offsetMsChanged();
+-    void trackChanged();
+ 
+   private:
+-    enum class ReplyKind {
+-        LrclibTrack,
+-        LrclibSearch,
+-        NetEaseSearch,
+-        NetEaseLyrics,
+-    };
+-
+-    enum class ProviderOutcome {
+-        Pending,
+-        NotFound,
+-        CandidateRejected,
+-        NoLyrics,
+-        Success,
+-        TransportError,
+-        InvalidResponse,
+-        ParseFailure,
+-    };
+-
+-    QNetworkAccessManager m_defaultManager;
+-    QNetworkAccessManager *m_manager = &m_defaultManager;
+-    QPointer<QNetworkReply> m_reply;
+-    QTimer m_loadDebounce;
++    void publish(const QString &status, QVariantList lines, const QString &error = {});
+ 
+-    quint64 m_generation = 0;
+-    bool m_forceNetwork = false;
+-    bool m_autoFallback = false;
+-    int m_netEaseCandidateIndex = 0;
+-
+-    ProviderOutcome m_lrclibOutcome = ProviderOutcome::Pending;
+-    ProviderOutcome m_netEaseSearchOutcome = ProviderOutcome::Pending;
+-    ProviderOutcome m_netEaseCandidateOutcome = ProviderOutcome::Pending;
+-    bool m_netEaseSawValidLyricResponse = false;
+-    bool m_netEaseSawNoLyrics = false;
+-    bool m_netEaseSawParseFailure = false;
+-
+-    bool m_loading = false;
+-    bool m_hasLyrics = false;
+-    bool m_hasSynchronizedLyrics = false;
+     QString m_status = QStringLiteral("idle");
+     QVariantList m_lyrics;
+-    QVariantList m_candidates;
+-    QVariantMap m_selectedCandidate;
+-    QVariantList m_netEaseCandidates;
+-    QVariantMap m_pendingCandidate;
+-    QString m_provider;
+     QString m_error;
+-
+-    QString m_artist;
+-    QString m_title;
+-    QString m_album;
+-    double m_duration = 0.0;
+-    QString m_playerId;
+-    double m_offsetMs = 0.0;
+-
+-    // The raw provider payload is retained so changing offset can rebuild the
+-    // timeline without asking a provider again.
+-    QString m_sourceText;
+-    QString m_sourceProvider;
+-    QVariantMap m_sourceCandidate;
+-
+-    void setStatus(const QString &status);
+-    void setLoading(bool loading);
+-    void setHasLyrics(bool value);
+-    void setHasSynchronizedLyrics(bool value);
+-    void setProvider(const QString &provider);
+-    void setError(const QString &error);
+-    void setSelectedCandidate(const QVariantMap &candidate);
+-    void clearLyrics();
+-    void clearCandidates();
+-    void clearSource();
+-    void resetProviderOutcomes();
+-    void resetNetEaseSession();
+-
+-    quint64 beginGeneration();
+-    void cancelInFlight();
+-    void scheduleLoad();
+-    void startLoad(quint64 generation, bool bypassCache);
+-
+-    bool loadLocalLyrics(quint64 generation);
+-    bool loadCachedLyrics(quint64 generation);
+-    bool acceptRawLyrics(const QString &provider, const QString &synced, const QString &plain,
+-                         const QVariantMap &candidate, quint64 generation, bool writeCache);
+-    void finishEmpty(const QString &message = {});
+-    void finishError(const QString &message);
+-    void rebuildTimelineFromSource();
+-
+-    void startLrclibTrack(quint64 generation);
+-    void startLrclibSearch(quint64 generation);
+-    void startNetEaseSearch(quint64 generation);
+-    void startNetEaseLyrics(const QVariantMap &candidate, quint64 generation);
+-    void startReply(const QUrl &url, ReplyKind kind, quint64 generation);
+-    void handleReply(QNetworkReply *reply, ReplyKind kind, quint64 generation);
+-
+-    bool handleLrclibTrack(const QJsonObject &json, quint64 generation);
+-    void handleLrclibSearch(const QJsonDocument &document, quint64 generation);
+-    void handleNetEaseSearch(const QJsonDocument &document, quint64 generation);
+-    bool handleNetEaseLyrics(const QJsonObject &json, quint64 generation);
+-    void tryNextNetEaseCandidate(quint64 generation);
+-
+-    void appendCandidates(const QVariantList &candidates);
+-    QVariantList parseLrclibCandidates(const QJsonDocument &document) const;
+-    QVariantList parseNetEaseCandidates(const QJsonDocument &document) const;
+-
+-    void cacheLyrics(const QString &provider, const QString &id, const QString &synced, const QString &plain,
+-                     const QVariantMap &candidate);
+-    QString cacheDirectory() const;
+-    QString cacheIndexPath() const;
+-    QString cachePath(const QString &provider, const QString &id) const;
+-    QString cacheKey() const;
+-    QString localDirectory() const;
+-    QString localLyricsPath() const;
+-    QString findLocalLyricsPath(const QString &directory) const;
+-
+-    QUrl lrclibUrl(bool search) const;
+-    QUrl netEaseSearchUrl() const;
+-    QUrl netEaseLyricsUrl(const QString &id) const;
+ };
+diff --git a/core/tests/CMakeLists.txt b/core/tests/CMakeLists.txt
+index 33b9142..44bd35b 100644
+--- a/core/tests/CMakeLists.txt
++++ b/core/tests/CMakeLists.txt
+@@ -76,7 +76,6 @@ qt_add_executable(lyrics_tests
+ target_link_libraries(lyrics_tests PRIVATE
+     ClavisLyrics
+     Qt6::Core
+-    Qt6::Network
+     Qt6::Qml
+     Qt6::Test
+ )
+diff --git a/core/tests/lyrics_test.cpp b/core/tests/lyrics_test.cpp
+index 281b2ea..c377400 100644
+--- a/core/tests/lyrics_test.cpp
++++ b/core/tests/lyrics_test.cpp
+@@ -1,749 +1,70 @@
+ #include "lyrics.h"
+ 
+-#include <QDir>
+-#include <QElapsedTimer>
+-#include <QFile>
+-#include <QJsonArray>
+-#include <QJsonDocument>
+-#include <QJsonObject>
+-#include <QNetworkAccessManager>
+-#include <QNetworkCookieJar>
+-#include <QNetworkReply>
+-#include <QNetworkRequest>
+-#include <QTemporaryDir>
+ #include <QTest>
+-#include <QTimer>
+-#include <QUrlQuery>
+ 
+-#include <functional>
+-#include <limits>
+-#include <cmath>
+-#include <cstring>
+-#include <utility>
+-
+-class ScopedEnvironment final {
+-  public:
+-    explicit ScopedEnvironment(const char *name)
+-        : m_name(name), m_wasSet(qEnvironmentVariableIsSet(name)), m_value(qgetenv(name))
+-    {}
+-
+-    ~ScopedEnvironment()
+-    {
+-        if (m_wasSet)
+-            qputenv(m_name.constData(), m_value);
+-        else
+-            qunsetenv(m_name.constData());
+-    }
+-
+-  private:
+-    QByteArray m_name;
+-    bool m_wasSet;
+-    QByteArray m_value;
+-};
+-
+-class FixtureReply final : public QNetworkReply {
+-  public:
+-    FixtureReply(const QNetworkRequest &request, bool *aborted, QObject *parent)
+-        : QNetworkReply(parent), m_aborted(aborted)
+-    {
+-        setRequest(request);
+-        setUrl(request.url());
+-        setOperation(QNetworkAccessManager::GetOperation);
+-        setOpenMode(QIODevice::ReadOnly | QIODevice::Unbuffered);
+-        setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+-    }
++class LyricsTest : public QObject {
++    Q_OBJECT
+ 
+-    void complete(const QByteArray &body, int statusCode = 200,
+-                  QNetworkReply::NetworkError networkError = QNetworkReply::NoError)
++  private slots:
++    void readsStandardPlayerText()
+     {
+-        if (m_completed)
+-            return;
+-        m_body = body;
+-        setAttribute(QNetworkRequest::HttpStatusCodeAttribute, statusCode);
+-        if (networkError != QNetworkReply::NoError)
+-            setError(networkError, QStringLiteral("fixture network failure"));
+-        m_completed = true;
+-        emit readyRead();
+-        emit finished();
++        Lyrics lyrics;
++        lyrics.setMetadata(QStringLiteral("player"),
++                           {{QStringLiteral("xesam:asText"), QStringLiteral("First\r\n\nSecond\rThird")}});
++        QCOMPARE(lyrics.status(), QStringLiteral("ready"));
++        QVERIFY(lyrics.hasLyrics());
++        QCOMPARE(lyrics.lyrics().size(), 3);
++        QCOMPARE(lyrics.lyrics().at(0).toMap().value(QStringLiteral("text")).toString(), QStringLiteral("First"));
++        QCOMPARE(lyrics.lyrics().at(2).toMap().value(QStringLiteral("text")).toString(), QStringLiteral("Third"));
+     }
+ 
+-    void abort() override
++    void metadataRemovalAndPlayerChangeClearText()
+     {
+-        if (m_completed || m_abortedState)
+-            return;
+-        if (m_aborted)
+-            *m_aborted = true;
+-        m_abortedState = true;
+-        setError(QNetworkReply::OperationCanceledError, QStringLiteral("cancelled"));
+-        emit finished();
++        Lyrics lyrics;
++        lyrics.setMetadata(QStringLiteral("first"), {{QStringLiteral("xesam:asText"), QStringLiteral("Old")}});
++        lyrics.setMetadata(QStringLiteral("second"), {{QStringLiteral("xesam:title"), QStringLiteral("Song")}});
++        QCOMPARE(lyrics.status(), QStringLiteral("empty"));
++        QVERIFY(!lyrics.hasLyrics());
++        lyrics.setMetadata(QStringLiteral("second"), {{QStringLiteral("xesam:asText"), QStringLiteral("New")}});
++        QCOMPARE(lyrics.lyrics().first().toMap().value(QStringLiteral("text")).toString(), QStringLiteral("New"));
++        lyrics.setMetadata(QStringLiteral("second"), {{QStringLiteral("xesam:asText"), QStringLiteral("   \n")}});
++        QCOMPARE(lyrics.status(), QStringLiteral("empty"));
++        QVERIFY(lyrics.lyrics().isEmpty());
++        lyrics.clearTrack();
++        QCOMPARE(lyrics.status(), QStringLiteral("idle"));
+     }
+ 
+-    bool isSequential() const override { return true; }
+-    bool completed() const { return m_completed; }
+-    bool aborted() const { return m_abortedState; }
+-
+-  protected:
+-    qint64 readData(char *data, qint64 maxlen) override
++    void rejectsInvalidPayload_data()
+     {
+-        if (m_offset >= m_body.size())
+-            return -1;
+-        const qint64 count = qMin(maxlen, static_cast<qint64>(m_body.size() - m_offset));
+-        memcpy(data, m_body.constData() + m_offset, static_cast<size_t>(count));
+-        m_offset += count;
+-        return count;
++        QTest::addColumn<QVariant>("payload");
++        QTest::newRow("number") << QVariant(123);
++        QTest::newRow("list") << QVariant(QStringList{QStringLiteral("Not a string")});
++        QTest::newRow("nul") << QVariant(QString(QChar::Null));
++        QTest::newRow("oversized") << QVariant(QString(512 * 1024 + 1, QLatin1Char('x')));
++        QTest::newRow("invalid-utf16") << QVariant(QString(QChar(0xd800)));
+     }
+ 
+-  private:
+-    QByteArray m_body;
+-    qint64 m_offset = 0;
+-    bool *m_aborted = nullptr;
+-    bool m_completed = false;
+-    bool m_abortedState = false;
+-};
+-
+-class FixtureNetworkAccessManager final : public QNetworkAccessManager {
+-  public:
+-    using Responder = std::function<QByteArray(const QUrl &, int)>;
+-    using StatusResponder = std::function<int(const QUrl &, int)>;
+-    using ErrorResponder = std::function<QNetworkReply::NetworkError(const QUrl &, int)>;
+-
+-    bool autoFinish = true;
+-    int requests = 0;
+-    bool firstRequestAborted = false;
+-    Responder responder = [](const QUrl &, int) {
+-        return QByteArrayLiteral(R"({"syncedLyrics":"[00:01.00]Injected"})");
+-    };
+-    StatusResponder statusResponder = [](const QUrl &, int) { return 200; };
+-    ErrorResponder errorResponder = [](const QUrl &, int) { return QNetworkReply::NoError; };
+-
+-    FixtureReply *replyAt(int index) const
++    void rejectsInvalidPayload()
+     {
+-        return index >= 0 && index < m_replies.size() ? m_replies.at(index) : nullptr;
++        QFETCH(QVariant, payload);
++        Lyrics lyrics;
++        lyrics.setMetadata(QStringLiteral("player"), {{QStringLiteral("xesam:asText"), QStringLiteral("Previous")}});
++        lyrics.setMetadata(QStringLiteral("player"), {{QStringLiteral("xesam:asText"), payload}});
++        QCOMPARE(lyrics.status(), QStringLiteral("error"));
++        QVERIFY(!lyrics.hasLyrics());
++        QVERIFY(!lyrics.error().isEmpty());
+     }
+ 
+-    const QNetworkRequest &requestAt(int index) const { return m_requests.at(index); }
+-
+-  protected:
+-    QNetworkReply *createRequest(Operation operation, const QNetworkRequest &request,
+-                                 QIODevice *outgoingData = nullptr) override
++    void doesNotInterpretMarkupOrTimestamps()
+     {
+-        Q_UNUSED(operation)
+-        Q_UNUSED(outgoingData)
+-        ++requests;
+-        m_requests.append(request);
+-        auto *reply = new FixtureReply(request, requests == 1 ? &firstRequestAborted : nullptr, this);
+-        m_replies.append(reply);
+-        if (autoFinish) {
+-            QTimer::singleShot(0, reply, [this, reply]() {
+-                if (!reply->completed() && !reply->aborted())
+-                    reply->complete(responder(reply->url(), m_replies.indexOf(reply)),
+-                                    statusResponder(reply->url(), m_replies.indexOf(reply)),
+-                                    errorResponder(reply->url(), m_replies.indexOf(reply)));
+-            });
+-        }
+-        return reply;
++        Lyrics lyrics;
++        const QString text = QStringLiteral("<b>Literal</b>\n[00:01.00]Not a timeline");
++        lyrics.setMetadata(QStringLiteral("player"), {{QStringLiteral("xesam:asText"), text}});
++        QCOMPARE(lyrics.lyrics().first().toMap().value(QStringLiteral("text")).toString(), QStringLiteral("<b>Literal</b>"));
++        QCOMPARE(lyrics.lyrics().last().toMap().value(QStringLiteral("text")).toString(), QStringLiteral("[00:01.00]Not a timeline"));
++        QVERIFY(!lyrics.lyrics().last().toMap().contains(QStringLiteral("time")));
+     }
+-
+-  private:
+-    QList<FixtureReply *> m_replies;
+-    QList<QNetworkRequest> m_requests;
+ };
+ 
+-class LyricsTest : public QObject {
+-    Q_OBJECT
+-
+-  private slots:
+-    void parsesNormalAndMillisecondTimestamps();
+-    void parsesMultipleTimestampsWithSharedText();
+-    void parsesSortingOffsetAndPlainLyrics();
+-    void ignoresMalformedLrcMetadata();
+-    void mapsTimelineAndOffset();
+-    void localLyricsUseReadableFilename();
+-    void cacheUsesProviderIdentityAndDuration();
+-    void trackDurationIsSafe_data();
+-    void trackDurationIsSafe();
+-    void netEaseRequestUsesCompatibleContract();
+-    void missingMetadataDoesNotRejectCandidates();
+-    void fallsBackToNetEaseWithScoring();
+-    void lrclibNotFoundAndNetEaseNotFoundAreEmpty();
+-    void netEaseTransportFailureIsError();
+-    void plainLyricsAreUnsynced();
+-    void reportsEmptyAndErrorStates();
+-    void deduplicatesSameTrackButRefreshes();
+-    void staleReplyCannotReplaceTrack();
+-    void rapidSwitchingAndClearTrackInvalidateReplies();
+-};
+-
+-namespace {
+-
+-void configureTemporaryPaths(const QString &root, ScopedEnvironment &cacheHome, ScopedEnvironment &dataHome,
+-                             ScopedEnvironment &localDirectory)
+-{
+-    Q_UNUSED(cacheHome)
+-    Q_UNUSED(dataHome)
+-    Q_UNUSED(localDirectory)
+-    qputenv("XDG_CACHE_HOME", QFile::encodeName(root + QStringLiteral("/cache")));
+-    qputenv("XDG_DATA_HOME", QFile::encodeName(root + QStringLiteral("/data")));
+-    qputenv("CLAVIS_LYRICS_DIR", QFile::encodeName(root + QStringLiteral("/local")));
+-    QVERIFY(QDir().mkpath(root + QStringLiteral("/local")));
+-}
+-
+-void waitForRequests(const FixtureNetworkAccessManager &manager, int count)
+-{
+-    QTRY_VERIFY_WITH_TIMEOUT(manager.requests >= count, 1500);
+-}
+-
+-QByteArray lrclibResponse(const QString &id, const QString &lyrics)
+-{
+-    QJsonObject object{
+-        {QStringLiteral("id"), id},
+-        {QStringLiteral("trackName"), QStringLiteral("title")},
+-        {QStringLiteral("artistName"), QStringLiteral("artist")},
+-        {QStringLiteral("albumName"), QStringLiteral("album")},
+-        {QStringLiteral("duration"), 120.0},
+-        {QStringLiteral("syncedLyrics"), lyrics},
+-    };
+-    return QJsonDocument(object).toJson(QJsonDocument::Compact);
+-}
+-
+-} // namespace
+-
+-void LyricsTest::parsesNormalAndMillisecondTimestamps()
+-{
+-    Lyrics lyrics;
+-    const QVariantList lines =
+-        lyrics.parseLrc(QStringLiteral("[1:02]minute\n[00:03.1]tenths\n[00:04.125]milliseconds\n"));
+-    QCOMPARE(lines.size(), 3);
+-    QCOMPARE(lines.at(0).toMap().value(QStringLiteral("time")).toDouble(), 3.1);
+-    QCOMPARE(lines.at(1).toMap().value(QStringLiteral("time")).toDouble(), 4.125);
+-    QCOMPARE(lines.at(2).toMap().value(QStringLiteral("time")).toDouble(), 62.0);
+-}
+-
+-void LyricsTest::parsesMultipleTimestampsWithSharedText()
+-{
+-    Lyrics lyrics;
+-    const QVariantList lines =
+-        lyrics.parseLrc(QStringLiteral("[00:10.00][00:02.50]second\n[00:01.00]first\n"));
+-    QCOMPARE(lines.size(), 3);
+-    QCOMPARE(lines.at(0).toMap().value(QStringLiteral("text")).toString(), QStringLiteral("first"));
+-    QCOMPARE(lines.at(1).toMap().value(QStringLiteral("text")).toString(), QStringLiteral("second"));
+-    QCOMPARE(lines.at(2).toMap().value(QStringLiteral("text")).toString(), QStringLiteral("second"));
+-    QCOMPARE(lines.at(1).toMap().value(QStringLiteral("time")).toDouble(), 2.5);
+-    QCOMPARE(lines.at(2).toMap().value(QStringLiteral("time")).toDouble(), 10.0);
+-}
+-
+-void LyricsTest::parsesSortingOffsetAndPlainLyrics()
+-{
+-    Lyrics lyrics;
+-    const QVariantList lines =
+-        lyrics.parseLrc(QStringLiteral("[offset:500]\n[00:01.20]hello\nplain line\n[ti:title]\n"), -200.0);
+-    QCOMPARE(lines.size(), 2);
+-    QCOMPARE(lines.at(0).toMap().value(QStringLiteral("time")).toDouble(), 1.5);
+-    QCOMPARE(lines.at(1).toMap().value(QStringLiteral("time")).toDouble(), -1.0);
+-    QCOMPARE(lines.at(1).toMap().value(QStringLiteral("text")).toString(), QStringLiteral("plain line"));
+-}
+-
+-void LyricsTest::ignoresMalformedLrcMetadata()
+-{
+-    Lyrics lyrics;
+-    const QVariantList lines =
+-        lyrics.parseLrc(QStringLiteral("[00:xx]broken\n[ar:artist]\n[00:02]valid\n[bad:tag]plain\n"));
+-    QCOMPARE(lines.size(), 2);
+-    QCOMPARE(lines.at(0).toMap().value(QStringLiteral("text")).toString(), QStringLiteral("valid"));
+-    QCOMPARE(lines.at(1).toMap().value(QStringLiteral("text")).toString(), QStringLiteral("[bad:tag]plain"));
+-}
+-
+-void LyricsTest::mapsTimelineAndOffset()
+-{
+-    Lyrics lyrics;
+-    lyrics.setOffsetMs(250.0);
+-    FixtureNetworkAccessManager manager;
+-    manager.autoFinish = false;
+-    lyrics.setNetworkAccessManager(&manager);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("title"));
+-    waitForRequests(manager, 1);
+-    manager.replyAt(0)->complete(QByteArrayLiteral(R"({"syncedLyrics":"[00:01.00]one\n[00:03.00]two"})"));
+-    QTRY_VERIFY_WITH_TIMEOUT(lyrics.hasLyrics(), 1000);
+-    QCOMPARE(lyrics.indexForTime(1.24), -1);
+-    QCOMPARE(lyrics.indexForTime(1.25), 0);
+-    QCOMPARE(lyrics.indexForTime(4.0), 1);
+-    QCOMPARE(lyrics.timeForIndex(1), 3.25);
+-    QCOMPARE(lyrics.timeForIndex(4), -1.0);
+-}
+-
+-void LyricsTest::localLyricsUseReadableFilename()
+-{
+-    QTemporaryDir temporary;
+-    QVERIFY(temporary.isValid());
+-    ScopedEnvironment cacheHome("XDG_CACHE_HOME");
+-    ScopedEnvironment dataHome("XDG_DATA_HOME");
+-    ScopedEnvironment localDirectory("CLAVIS_LYRICS_DIR");
+-    configureTemporaryPaths(temporary.path(), cacheHome, dataHome, localDirectory);
+-
+-    const QString path =
+-        QDir(temporary.path() + QStringLiteral("/local")).filePath(QStringLiteral("Artist - Title.lrc"));
+-    QFile local(path);
+-    QVERIFY(local.open(QIODevice::WriteOnly));
+-    local.write("[00:01.00]local line\n");
+-    local.close();
+-
+-    FixtureNetworkAccessManager manager;
+-    Lyrics lyrics;
+-    lyrics.setNetworkAccessManager(&manager);
+-    lyrics.setTrack(QStringLiteral("Artist"), QStringLiteral("Title"));
+-    QTRY_VERIFY_WITH_TIMEOUT(lyrics.hasLyrics(), 1000);
+-    QCOMPARE(manager.requests, 0);
+-    QCOMPARE(lyrics.provider(), QStringLiteral("Local"));
+-    QCOMPARE(lyrics.lyrics().first().toMap().value(QStringLiteral("text")).toString(),
+-             QStringLiteral("local line"));
+-}
+-
+-void LyricsTest::cacheUsesProviderIdentityAndDuration()
+-{
+-    QTemporaryDir temporary;
+-    QVERIFY(temporary.isValid());
+-    ScopedEnvironment cacheHome("XDG_CACHE_HOME");
+-    ScopedEnvironment dataHome("XDG_DATA_HOME");
+-    ScopedEnvironment localDirectory("CLAVIS_LYRICS_DIR");
+-    configureTemporaryPaths(temporary.path(), cacheHome, dataHome, localDirectory);
+-
+-    FixtureNetworkAccessManager firstManager;
+-    firstManager.responder = [](const QUrl &, int) {
+-        return lrclibResponse(QStringLiteral("42"), QStringLiteral("[00:01.00]cached"));
+-    };
+-    Lyrics first;
+-    first.setNetworkAccessManager(&firstManager);
+-    first.setTrack(QStringLiteral("artist"), QStringLiteral("title"), QStringLiteral("album"), 120.0);
+-    QTRY_VERIFY_WITH_TIMEOUT(first.hasLyrics(), 1000);
+-    QCOMPARE(first.selectedCandidate().value(QStringLiteral("id")).toString(), QStringLiteral("42"));
+-
+-    FixtureNetworkAccessManager cacheManager;
+-    Lyrics cached;
+-    cached.setNetworkAccessManager(&cacheManager);
+-    cached.setTrack(QStringLiteral("artist"), QStringLiteral("title"), QStringLiteral("album"), 120.0);
+-    QTRY_VERIFY_WITH_TIMEOUT(cached.hasLyrics(), 1000);
+-    QCOMPARE(cacheManager.requests, 0);
+-    QCOMPARE(cached.provider(), QStringLiteral("LRCLIB"));
+-    QCOMPARE(cached.selectedCandidate().value(QStringLiteral("id")).toString(), QStringLiteral("42"));
+-
+-    cacheManager.responder = [](const QUrl &, int) {
+-        return lrclibResponse(QStringLiteral("43"), QStringLiteral("[00:02.00]refreshed"));
+-    };
+-    cached.refresh();
+-    waitForRequests(cacheManager, 1);
+-    QTRY_COMPARE_WITH_TIMEOUT(cached.selectedCandidate().value(QStringLiteral("id")).toString(),
+-                              QStringLiteral("43"), 1000);
+-
+-    FixtureNetworkAccessManager differentDurationManager;
+-    Lyrics differentDuration;
+-    differentDuration.setNetworkAccessManager(&differentDurationManager);
+-    differentDuration.setTrack(QStringLiteral("artist"), QStringLiteral("title"), QStringLiteral("album"),
+-                               121.0);
+-    waitForRequests(differentDurationManager, 1);
+-}
+-
+-void LyricsTest::trackDurationIsSafe_data()
+-{
+-    QTest::addColumn<double>("duration");
+-    QTest::addColumn<double>("expected");
+-    const double limit = std::numeric_limits<int>::max();
+-    QTest::newRow("ordinary") << 120.6 << 120.6;
+-    QTest::newRow("largest-rounded-second") << limit + 0.49 << limit + 0.49;
+-    QTest::newRow("rounding-overflow") << limit + 0.5 << 0.0;
+-    QTest::newRow("mpris-sentinel") << double(std::numeric_limits<qint64>::max()) / 1000000.0 << 0.0;
+-    QTest::newRow("millisecond-overflow") << std::numeric_limits<double>::max() << 0.0;
+-    QTest::newRow("infinity") << std::numeric_limits<double>::infinity() << 0.0;
+-    QTest::newRow("nan") << std::numeric_limits<double>::quiet_NaN() << 0.0;
+-    QTest::newRow("negative") << -1.0 << 0.0;
+-    QTest::newRow("unknown") << 0.0 << 0.0;
+-}
+-
+-void LyricsTest::trackDurationIsSafe()
+-{
+-    QFETCH(double, duration);
+-    QFETCH(double, expected);
+-    QTemporaryDir temporary;
+-    QVERIFY(temporary.isValid());
+-    ScopedEnvironment cacheHome("XDG_CACHE_HOME");
+-    ScopedEnvironment dataHome("XDG_DATA_HOME");
+-    ScopedEnvironment localDirectory("CLAVIS_LYRICS_DIR");
+-    configureTemporaryPaths(temporary.path(), cacheHome, dataHome, localDirectory);
+-
+-    FixtureNetworkAccessManager manager;
+-    manager.responder = [](const QUrl &, int) {
+-        return lrclibResponse(QStringLiteral("42"), QStringLiteral("[00:01]line"));
+-    };
+-    Lyrics lyrics;
+-    lyrics.setNetworkAccessManager(&manager);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("title"), {}, duration);
+-    QCOMPARE(lyrics.trackDuration(), expected);
+-    QTRY_VERIFY_WITH_TIMEOUT(lyrics.hasLyrics(), 1500);
+-    QCOMPARE(manager.requests, 1);
+-    const QUrlQuery query(manager.requestAt(0).url());
+-    QCOMPARE(query.hasQueryItem(QStringLiteral("duration")), expected > 0.0);
+-    if (expected > 0.0)
+-        QCOMPARE(query.queryItemValue(QStringLiteral("duration")), QString::number(qRound(expected)));
+-
+-    // Unknown/invalid lengths use the same cache identity, while supported
+-    // fractional durations retain their existing millisecond identity.
+-    FixtureNetworkAccessManager cachedManager;
+-    Lyrics cached;
+-    cached.setNetworkAccessManager(&cachedManager);
+-    cached.setTrack(QStringLiteral("artist"), QStringLiteral("title"), {}, expected);
+-    QTRY_VERIFY_WITH_TIMEOUT(cached.hasLyrics(), 1500);
+-    QCOMPARE(cachedManager.requests, 0);
+-
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("title"), {}, 240.0);
+-    QTRY_COMPARE_WITH_TIMEOUT(manager.requests, 2, 1500);
+-    QCOMPARE(lyrics.trackDuration(), 240.0);
+-    QCOMPARE(QUrlQuery(manager.requestAt(1).url()).queryItemValue(QStringLiteral("duration")),
+-             QStringLiteral("240"));
+-}
+-
+-void LyricsTest::netEaseRequestUsesCompatibleContract()
+-{
+-    QTemporaryDir temporary;
+-    QVERIFY(temporary.isValid());
+-    ScopedEnvironment cacheHome("XDG_CACHE_HOME");
+-    ScopedEnvironment dataHome("XDG_DATA_HOME");
+-    ScopedEnvironment localDirectory("CLAVIS_LYRICS_DIR");
+-    configureTemporaryPaths(temporary.path(), cacheHome, dataHome, localDirectory);
+-
+-    FixtureNetworkAccessManager manager;
+-    manager.autoFinish = false;
+-    auto *oldCookieJar = new QNetworkCookieJar(&manager);
+-    manager.setCookieJar(oldCookieJar);
+-
+-    Lyrics lyrics;
+-    lyrics.setNetworkAccessManager(&manager);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("Title"));
+-    waitForRequests(manager, 1);
+-    manager.replyAt(0)->complete({}, 404);
+-
+-    waitForRequests(manager, 2);
+-    QVERIFY(manager.cookieJar() != oldCookieJar);
+-    const QNetworkRequest searchRequest = manager.requestAt(1);
+-    QCOMPARE(searchRequest.url().path(), QStringLiteral("/api/search/get"));
+-    QUrlQuery searchQuery(searchRequest.url());
+-    QCOMPARE(searchQuery.queryItemValue(QStringLiteral("s")), QStringLiteral("Title artist"));
+-    QCOMPARE(searchQuery.queryItemValue(QStringLiteral("type")), QStringLiteral("1"));
+-    QCOMPARE(searchQuery.queryItemValue(QStringLiteral("limit")), QStringLiteral("5"));
+-    QVERIFY(searchQuery.queryItemValue(QStringLiteral("offset")).isEmpty());
+-    QVERIFY(searchRequest.rawHeader("User-Agent").startsWith("Mozilla/"));
+-    QCOMPARE(searchRequest.rawHeader("Referer"), QByteArrayLiteral("https://music.163.com/"));
+-
+-    manager.replyAt(1)->complete(QByteArrayLiteral(R"JSON({"result":{"songs":[
+-        {"id":7,"name":"Title","artists":[{"name":"artist"}],"album":{"name":"album"},"dt":120000}
+-    ]}})JSON"));
+-    waitForRequests(manager, 3);
+-    const QNetworkRequest lyricRequest = manager.requestAt(2);
+-    QCOMPARE(lyricRequest.url().path(), QStringLiteral("/api/song/lyric"));
+-    QUrlQuery lyricQuery(lyricRequest.url());
+-    QCOMPARE(lyricQuery.queryItemValue(QStringLiteral("id")), QStringLiteral("7"));
+-    QCOMPARE(lyricQuery.queryItemValue(QStringLiteral("lv")), QStringLiteral("-1"));
+-    QCOMPARE(lyricQuery.queryItemValue(QStringLiteral("kv")), QStringLiteral("1"));
+-    QCOMPARE(lyricQuery.queryItemValue(QStringLiteral("tv")), QStringLiteral("-1"));
+-    QVERIFY(lyricRequest.rawHeader("User-Agent").startsWith("Mozilla/"));
+-    QCOMPARE(lyricRequest.rawHeader("Referer"), QByteArrayLiteral("https://music.163.com/"));
+-
+-    manager.replyAt(2)->complete(QByteArrayLiteral(R"({"lrc":{"version":1,"lyric":"[00:01.00]found"}})"));
+-    QTRY_VERIFY_WITH_TIMEOUT(lyrics.hasLyrics(), 1000);
+-    QCOMPARE(lyrics.provider(), QStringLiteral("NetEase"));
+-}
+-
+-void LyricsTest::missingMetadataDoesNotRejectCandidates()
+-{
+-    const auto verify = [](const QString &artist, const QString &album, double duration,
+-                           const QString &candidateArtist, const QString &candidateAlbum,
+-                           double candidateDuration) {
+-        QTemporaryDir temporary;
+-        if (!temporary.isValid())
+-            return false;
+-        ScopedEnvironment cacheHome("XDG_CACHE_HOME");
+-        ScopedEnvironment dataHome("XDG_DATA_HOME");
+-        ScopedEnvironment localDirectory("CLAVIS_LYRICS_DIR");
+-        configureTemporaryPaths(temporary.path(), cacheHome, dataHome, localDirectory);
+-
+-        FixtureNetworkAccessManager manager;
+-        manager.responder = [candidateArtist, candidateAlbum, candidateDuration](const QUrl &url, int) {
+-            if (url.host() == QStringLiteral("lrclib.net"))
+-                return QByteArrayLiteral(R"({"syncedLyrics":""})");
+-
+-            if (url.path() == QStringLiteral("/api/search/get")) {
+-                QJsonArray artists;
+-                if (!candidateArtist.isEmpty())
+-                    artists.append(QJsonObject{{QStringLiteral("name"), candidateArtist}});
+-                QJsonObject song{
+-                    {QStringLiteral("id"), 1},
+-                    {QStringLiteral("name"), QStringLiteral("Title")},
+-                    {QStringLiteral("artists"), artists},
+-                };
+-                if (!candidateAlbum.isEmpty())
+-                    song.insert(QStringLiteral("album"),
+-                                QJsonObject{{QStringLiteral("name"), candidateAlbum}});
+-                if (candidateDuration > 0.0)
+-                    song.insert(QStringLiteral("dt"), candidateDuration * 1000.0);
+-                return QJsonDocument(QJsonObject{
+-                                         {QStringLiteral("result"),
+-                                          QJsonObject{
+-                                              {QStringLiteral("songs"), QJsonArray{song}},
+-                                          }},
+-                                     })
+-                    .toJson(QJsonDocument::Compact);
+-            }
+-
+-            return QByteArrayLiteral(R"({"lrc":{"lyric":"[00:01.00]metadata match"}})");
+-        };
+-
+-        Lyrics lyrics;
+-        lyrics.setNetworkAccessManager(&manager);
+-        lyrics.setTrack(artist, QStringLiteral("Title"), album, duration);
+-        QElapsedTimer waitTimer;
+-        waitTimer.start();
+-        while (!lyrics.hasLyrics() && waitTimer.elapsed() < 1000)
+-            QTest::qWait(10);
+-        return lyrics.provider() == QStringLiteral("NetEase");
+-    };
+-
+-    QVERIFY(verify({}, {}, 0.0, {}, {}, 0.0));
+-    QVERIFY(verify(QStringLiteral("artist"), QStringLiteral("album"), 120.0, QStringLiteral("artist"), {},
+-                   120.0));
+-    QVERIFY(
+-        verify(QStringLiteral("artist"), {}, 120.0, QStringLiteral("artist"), QStringLiteral("album"), 0.0));
+-}
+-
+-void LyricsTest::fallsBackToNetEaseWithScoring()
+-{
+-    QTemporaryDir temporary;
+-    QVERIFY(temporary.isValid());
+-    ScopedEnvironment cacheHome("XDG_CACHE_HOME");
+-    ScopedEnvironment dataHome("XDG_DATA_HOME");
+-    ScopedEnvironment localDirectory("CLAVIS_LYRICS_DIR");
+-    configureTemporaryPaths(temporary.path(), cacheHome, dataHome, localDirectory);
+-
+-    FixtureNetworkAccessManager manager;
+-    manager.responder = [](const QUrl &url, int) {
+-        if (url.host() == QStringLiteral("lrclib.net"))
+-            return QByteArrayLiteral(R"({"syncedLyrics":""})");
+-        if (url.path() == QStringLiteral("/api/search/get")) {
+-            return QByteArray(R"JSON({"result":{"songs":[
+-                {"id":1,"name":"Title (Remix)","artists":[{"name":"artist"}],"album":{"name":"album"},"dt":120000},
+-                {"id":2,"name":"Title","artists":[{"name":"artist"}],"album":{"name":"album"},"dt":120000}
+-            ]}})JSON");
+-        }
+-        QUrlQuery query(url);
+-        if (query.queryItemValue(QStringLiteral("id")) == QStringLiteral("2"))
+-            return QByteArrayLiteral(R"({"lrc":{"lyric":"[00:02.00]best match"}})");
+-        return QByteArrayLiteral(R"({"lrc":{"lyric":""}})");
+-    };
+-
+-    Lyrics lyrics;
+-    lyrics.setNetworkAccessManager(&manager);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("Title"), QStringLiteral("album"), 120.0);
+-    QTRY_VERIFY_WITH_TIMEOUT(lyrics.hasLyrics(), 1500);
+-    QCOMPARE(lyrics.provider(), QStringLiteral("NetEase"));
+-    QCOMPARE(lyrics.selectedCandidate().value(QStringLiteral("id")).toString(), QStringLiteral("2"));
+-    QVERIFY(lyrics.candidates().size() >= 2);
+-    QCOMPARE(lyrics.lyrics().first().toMap().value(QStringLiteral("text")).toString(),
+-             QStringLiteral("best match"));
+-}
+-
+-void LyricsTest::lrclibNotFoundAndNetEaseNotFoundAreEmpty()
+-{
+-    QTemporaryDir temporary;
+-    QVERIFY(temporary.isValid());
+-    ScopedEnvironment cacheHome("XDG_CACHE_HOME");
+-    ScopedEnvironment dataHome("XDG_DATA_HOME");
+-    ScopedEnvironment localDirectory("CLAVIS_LYRICS_DIR");
+-    configureTemporaryPaths(temporary.path(), cacheHome, dataHome, localDirectory);
+-
+-    FixtureNetworkAccessManager manager;
+-    manager.statusResponder = [](const QUrl &url, int) {
+-        return url.host() == QStringLiteral("lrclib.net") ? 404 : 200;
+-    };
+-    manager.responder = [](const QUrl &url, int) {
+-        if (url.path() == QStringLiteral("/api/search/get"))
+-            return QByteArrayLiteral(R"({"result":{"songs":[]}})");
+-        return QByteArrayLiteral("{}");
+-    };
+-
+-    Lyrics lyrics;
+-    lyrics.setNetworkAccessManager(&manager);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("missing"));
+-    QTRY_COMPARE_WITH_TIMEOUT(lyrics.status(), QStringLiteral("empty"), 1500);
+-    QVERIFY(!lyrics.loading());
+-    QVERIFY(!lyrics.hasLyrics());
+-    QVERIFY(lyrics.error().isEmpty());
+-}
+-
+-void LyricsTest::netEaseTransportFailureIsError()
+-{
+-    QTemporaryDir temporary;
+-    QVERIFY(temporary.isValid());
+-    ScopedEnvironment cacheHome("XDG_CACHE_HOME");
+-    ScopedEnvironment dataHome("XDG_DATA_HOME");
+-    ScopedEnvironment localDirectory("CLAVIS_LYRICS_DIR");
+-    configureTemporaryPaths(temporary.path(), cacheHome, dataHome, localDirectory);
+-
+-    FixtureNetworkAccessManager manager;
+-    manager.errorResponder = [](const QUrl &, int) { return QNetworkReply::HostNotFoundError; };
+-
+-    Lyrics lyrics;
+-    lyrics.setNetworkAccessManager(&manager);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("offline"));
+-    QTRY_COMPARE_WITH_TIMEOUT(lyrics.status(), QStringLiteral("error"), 1500);
+-    QVERIFY(!lyrics.loading());
+-    QVERIFY(!lyrics.error().isEmpty());
+-}
+-
+-void LyricsTest::plainLyricsAreUnsynced()
+-{
+-    QTemporaryDir temporary;
+-    QVERIFY(temporary.isValid());
+-    ScopedEnvironment cacheHome("XDG_CACHE_HOME");
+-    ScopedEnvironment dataHome("XDG_DATA_HOME");
+-    ScopedEnvironment localDirectory("CLAVIS_LYRICS_DIR");
+-    configureTemporaryPaths(temporary.path(), cacheHome, dataHome, localDirectory);
+-
+-    FixtureNetworkAccessManager manager;
+-    manager.responder = [](const QUrl &, int) {
+-        return QByteArrayLiteral(R"({"plainLyrics":"first line\nsecond line"})");
+-    };
+-    Lyrics lyrics;
+-    lyrics.setNetworkAccessManager(&manager);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("title"));
+-    QTRY_VERIFY_WITH_TIMEOUT(lyrics.hasLyrics(), 1000);
+-    QVERIFY(!lyrics.hasSynchronizedLyrics());
+-    QCOMPARE(lyrics.indexForTime(10.0), -1);
+-    QCOMPARE(lyrics.timeForIndex(0), -1.0);
+-    QCOMPARE(lyrics.status(), QStringLiteral("ready"));
+-}
+-
+-void LyricsTest::reportsEmptyAndErrorStates()
+-{
+-    QTemporaryDir temporary;
+-    QVERIFY(temporary.isValid());
+-    ScopedEnvironment cacheHome("XDG_CACHE_HOME");
+-    ScopedEnvironment dataHome("XDG_DATA_HOME");
+-    ScopedEnvironment localDirectory("CLAVIS_LYRICS_DIR");
+-    configureTemporaryPaths(temporary.path(), cacheHome, dataHome, localDirectory);
+-
+-    FixtureNetworkAccessManager emptyManager;
+-    emptyManager.responder = [](const QUrl &url, int) {
+-        if (url.host() == QStringLiteral("lrclib.net"))
+-            return QByteArrayLiteral(R"({"syncedLyrics":""})");
+-        return QByteArrayLiteral(R"({"result":{"songs":[]}})");
+-    };
+-    Lyrics emptyLyrics;
+-    emptyLyrics.setNetworkAccessManager(&emptyManager);
+-    emptyLyrics.setTrack(QStringLiteral("artist"), QStringLiteral("missing"));
+-    QTRY_COMPARE_WITH_TIMEOUT(emptyLyrics.status(), QStringLiteral("empty"), 1500);
+-    QVERIFY(!emptyLyrics.loading());
+-    QVERIFY(!emptyLyrics.hasLyrics());
+-
+-    FixtureNetworkAccessManager errorManager;
+-    errorManager.responder = [](const QUrl &, int) { return QByteArrayLiteral("not json"); };
+-    Lyrics errorLyrics;
+-    errorLyrics.setNetworkAccessManager(&errorManager);
+-    errorLyrics.setTrack(QStringLiteral("artist"), QStringLiteral("broken"));
+-    QTRY_COMPARE_WITH_TIMEOUT(errorLyrics.status(), QStringLiteral("error"), 1500);
+-    QVERIFY(!errorLyrics.loading());
+-    QVERIFY(!errorLyrics.error().isEmpty());
+-}
+-
+-void LyricsTest::deduplicatesSameTrackButRefreshes()
+-{
+-    QTemporaryDir temporary;
+-    QVERIFY(temporary.isValid());
+-    ScopedEnvironment cacheHome("XDG_CACHE_HOME");
+-    ScopedEnvironment dataHome("XDG_DATA_HOME");
+-    ScopedEnvironment localDirectory("CLAVIS_LYRICS_DIR");
+-    configureTemporaryPaths(temporary.path(), cacheHome, dataHome, localDirectory);
+-
+-    FixtureNetworkAccessManager manager;
+-    manager.autoFinish = false;
+-    Lyrics lyrics;
+-    lyrics.setNetworkAccessManager(&manager);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("title"));
+-    waitForRequests(manager, 1);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("title"));
+-    QTest::qWait(120);
+-    QCOMPARE(manager.requests, 1);
+-    manager.replyAt(0)->complete(QByteArrayLiteral(R"({"syncedLyrics":"[00:01.00]first"})"));
+-    QTRY_VERIFY_WITH_TIMEOUT(lyrics.hasLyrics(), 1000);
+-
+-    lyrics.refresh();
+-    waitForRequests(manager, 2);
+-    QVERIFY(lyrics.loading());
+-    manager.replyAt(1)->complete(QByteArrayLiteral(R"({"syncedLyrics":"[00:02.00]refreshed"})"));
+-    QTRY_VERIFY_WITH_TIMEOUT(lyrics.hasLyrics(), 1000);
+-    QCOMPARE(lyrics.lyrics().first().toMap().value(QStringLiteral("text")).toString(),
+-             QStringLiteral("refreshed"));
+-    QCOMPARE(manager.requests, 2);
+-}
+-
+-void LyricsTest::staleReplyCannotReplaceTrack()
+-{
+-    QTemporaryDir temporary;
+-    QVERIFY(temporary.isValid());
+-    ScopedEnvironment cacheHome("XDG_CACHE_HOME");
+-    ScopedEnvironment dataHome("XDG_DATA_HOME");
+-    ScopedEnvironment localDirectory("CLAVIS_LYRICS_DIR");
+-    configureTemporaryPaths(temporary.path(), cacheHome, dataHome, localDirectory);
+-
+-    FixtureNetworkAccessManager manager;
+-    manager.autoFinish = false;
+-    Lyrics lyrics;
+-    lyrics.setNetworkAccessManager(&manager);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("first"));
+-    waitForRequests(manager, 1);
+-    FixtureReply *firstReply = manager.replyAt(0);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("second"));
+-    firstReply->complete(QByteArrayLiteral(R"({"syncedLyrics":"[00:01.00]stale first"})"));
+-    waitForRequests(manager, 2);
+-    QVERIFY(manager.firstRequestAborted);
+-    manager.replyAt(1)->complete(QByteArrayLiteral(R"({"syncedLyrics":"[00:02.00]second"})"));
+-    QTRY_VERIFY_WITH_TIMEOUT(lyrics.hasLyrics(), 1000);
+-    QCOMPARE(lyrics.trackTitle(), QStringLiteral("second"));
+-    QCOMPARE(lyrics.lyrics().first().toMap().value(QStringLiteral("text")).toString(),
+-             QStringLiteral("second"));
+-}
+-
+-void LyricsTest::rapidSwitchingAndClearTrackInvalidateReplies()
+-{
+-    QTemporaryDir temporary;
+-    QVERIFY(temporary.isValid());
+-    ScopedEnvironment cacheHome("XDG_CACHE_HOME");
+-    ScopedEnvironment dataHome("XDG_DATA_HOME");
+-    ScopedEnvironment localDirectory("CLAVIS_LYRICS_DIR");
+-    configureTemporaryPaths(temporary.path(), cacheHome, dataHome, localDirectory);
+-
+-    FixtureNetworkAccessManager manager;
+-    manager.autoFinish = false;
+-    Lyrics lyrics;
+-    lyrics.setNetworkAccessManager(&manager);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("A"));
+-    waitForRequests(manager, 1);
+-    FixtureReply *firstReply = manager.replyAt(0);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("B"));
+-    firstReply->complete(QByteArrayLiteral(R"({"syncedLyrics":"[00:01.00]stale A"})"));
+-    waitForRequests(manager, 2);
+-    FixtureReply *secondReply = manager.replyAt(1);
+-    lyrics.setTrack(QStringLiteral("artist"), QStringLiteral("C"));
+-    secondReply->complete(QByteArrayLiteral(R"({"syncedLyrics":"[00:02.00]stale B"})"));
+-    waitForRequests(manager, 3);
+-    manager.replyAt(2)->complete(QByteArrayLiteral(R"({"syncedLyrics":"[00:03.00]C"})"));
+-    QTRY_VERIFY_WITH_TIMEOUT(lyrics.hasLyrics(), 1000);
+-    QCOMPARE(lyrics.trackTitle(), QStringLiteral("C"));
+-    QCOMPARE(lyrics.lyrics().first().toMap().value(QStringLiteral("text")).toString(), QStringLiteral("C"));
+-
+-    lyrics.clearTrack();
+-    QCOMPARE(lyrics.status(), QStringLiteral("idle"));
+-    QVERIFY(!lyrics.loading());
+-    QVERIFY(!lyrics.hasLyrics());
+-    QVERIFY(lyrics.lyrics().isEmpty());
+-}
+-
+-QTEST_MAIN(LyricsTest)
+-
++QTEST_GUILESS_MAIN(LyricsTest)
+ #include "lyrics_test.moc"
+diff --git a/i18n/clavis_en_US.ts b/i18n/clavis_en_US.ts
+index b3910ee..5950ae4 100644
+--- a/i18n/clavis_en_US.ts
++++ b/i18n/clavis_en_US.ts
+@@ -14452,4 +14452,11 @@ Windows: </translation>
+         <translation>Grain: %1%</translation>
+     </message>
+ </context>
++<context>
++    <name>Lyrics</name>
++    <message>
++        <source>Invalid player lyrics</source>
++        <translation>Invalid player lyrics</translation>
++    </message>
++</context>
+ </TS>
+diff --git a/i18n/clavis_zh_CN.ts b/i18n/clavis_zh_CN.ts
+index d4a8071..52f515d 100644
+--- a/i18n/clavis_zh_CN.ts
++++ b/i18n/clavis_zh_CN.ts
+@@ -14441,4 +14441,11 @@ Windows: </source>
+         <translation>颗粒：%1%</translation>
+     </message>
+ </context>
++<context>
++    <name>Lyrics</name>
++    <message>
++        <source>Invalid player lyrics</source>
++        <translation>播放器歌词无效</translation>
++    </message>
++</context>
+ </TS>
+diff --git a/i18n/clavis_zh_TW.ts b/i18n/clavis_zh_TW.ts
+index afe300e..6a62465 100644
+--- a/i18n/clavis_zh_TW.ts
++++ b/i18n/clavis_zh_TW.ts
+@@ -14441,4 +14441,11 @@ Windows: </source>
+         <translation>顆粒：%1%</translation>
+     </message>
+ </context>
++<context>
++    <name>Lyrics</name>
++    <message>
++        <source>Invalid player lyrics</source>
++        <translation>播放器歌詞無效</translation>
++    </message>
++</context>
+ </TS>

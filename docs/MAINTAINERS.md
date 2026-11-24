@@ -2,7 +2,10 @@
 
 ## 手动构建
 
-在 GitHub Actions 的 **Build packages** workflow 中指定包名。也可从构建运行下载该包的 `arch-packages-<包名>` artifact；artifact 保留 30 天。成功构建后，包还会发布到 GHCR OCI。
+在 GitHub Actions 的 **Build packages** workflow 中指定包名。也可从构建运行下载该包的 `arch-packages-<包名>` artifact；artifact 保留 30 天。
+
+特性分支只上传 artifact，不发布 GHCR。手动构建的 `publish` 默认关闭；仅在 `main` 明确开启它才会发布。
+`main` 的 push 构建仍在成功后自动发布；特性分支须手动选择包名触发，不构建无关包。
 
 推送包目录或相关构建文件的变更会自动构建受影响的包。构建使用 `archlinux:base-devel`，并运行包元数据检查和 namcap；验证以 Actions 为准，不在本机运行 `makepkg`。
 
