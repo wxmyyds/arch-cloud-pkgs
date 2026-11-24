@@ -12,7 +12,7 @@
 # 校验：二进制与补全包的 SHA256 直接取自该 release 的 .sha256 资产，桌面项 /
 #      图标 / D-Bus / portal / polkit / systemd / LICENSE / README 按同一 tag 从
 #      仓库 raw 取源并流式计算 SHA256——makepkg 落地即校验，无需人工维护。
-#      另有体积下限、ELF 魔数与 `dfiles version` 版本对账兜底。
+#      另有体积下限、ELF 魔数与 `dfiles version` 版本对账校验。
 #
 # 运行时依赖 quickshell（提供 Quickshell.* QML 模块）与 qt6-declarative；
 # PDF 预览额外需要 qt6-webengine（可选）。AUR 有 dux-files-bin / dux-files-git

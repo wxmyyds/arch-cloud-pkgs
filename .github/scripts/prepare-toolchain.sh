@@ -31,7 +31,7 @@ conf="$d/build.conf"
 # 共用同一份 registry 与工具链。不这么做的话 rustup 会按 $HOME 分裂成
 # /root/.rustup 与 /home/builder/.rustup 两份，target 得装两次。
 # 注意：makepkg 是 `sudo -u builder` 跑的，sudo 会重置环境变量，所以这两个值
-# 在 PKGBUILD 里用同样的默认值又兜底了一遍，改动时两边要同步。
+# 在 PKGBUILD 里使用同样的默认值，改动时两处要同步。
 export CARGO_HOME="${CARGO_HOME:-/home/builder/.cargo}"
 export RUSTUP_HOME="${RUSTUP_HOME:-/opt/rustup}"
 
@@ -153,17 +153,9 @@ fi
 if [ "${needs_cargo_ndk:-false}" = "true" ]; then
   # 缓存恢复的 registry 以 root 落地，先归还 builder 再安装（builder 的 cargo 才被 makepkg 用到）
   chown -R builder:builder "$CARGO_HOME"
-  if ! command -v cargo-ndk >/dev/null 2>&1 && [ ! -x /usr/local/bin/cargo-ndk ]; then
+  if ! command -v cargo-ndk >/dev/null 2>&1; then
     echo "安装 cargo-ndk"
     cargo install cargo-ndk --locked
-    # CARGO_HOME 是共享的，装完就落在 $CARGO_HOME/bin（已进 PATH）。
-    # 再复制一份到 /usr/local/bin 兜底：sudo -u builder 会重置环境变量，
-    # PKGBUILD 里未必看得到 $CARGO_HOME/bin，而 /usr/local/bin 默认在 PATH。
-    # 找不到 cargo-ndk 时 PKGBUILD 会 fallback 纯 cargo 交叉 →
-    # 用 cc 链接 → 找不到 NDK 的 -llog/-lunwind
-    if [ -x "$CARGO_HOME/bin/cargo-ndk" ]; then
-      cp -f "$CARGO_HOME/bin/cargo-ndk" /usr/local/bin/cargo-ndk
-    fi
   fi
   # cargo-ndk 是 Cargo 子命令，直接执行 cargo-ndk 会主动报错：
   # "This binary may only be called via cargo ndk"。

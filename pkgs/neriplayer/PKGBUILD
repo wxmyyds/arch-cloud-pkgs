@@ -214,7 +214,7 @@ package() {
         return 1
     }
 
-    # 兜底：断言装包即能启动，不把缺库的坏包打出来
+    # 断言装包即能启动，不把缺库的坏包打出来
     if ldd "$pkgdir/usr/bin/neri-player-desktop" 2>/dev/null | grep -q 'not found'; then
         echo >&2 "!! 主程序仍有缺失的动态库："
         ldd "$pkgdir/usr/bin/neri-player-desktop" 2>/dev/null | grep 'not found' >&2 || true

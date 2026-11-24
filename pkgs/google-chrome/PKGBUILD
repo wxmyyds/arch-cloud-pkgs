@@ -8,8 +8,8 @@
 #      到 AUR 的相同/相近版本，跳过即可，以本仓库 bump 节奏为准。
 #
 # deb 是 ar 归档：makepkg 按内容探测识别后用 bsdtar 解出 debian-binary/
-# control.tar.xz/data.tar.xz 三个成员（见 /usr/share/makepkg/source/file.sh 的
-# fallback 分支），package() 再解第二层。打包逻辑与 AUR google-chrome 保持一致。
+# control.tar.xz/data.tar.xz 三个成员（见 /usr/share/makepkg/source/file.sh），
+# package() 再解第二层。打包逻辑与 AUR google-chrome 保持一致。
 #
 # 产物约 370MB；namcap 扫描该体积会严重拖慢 CI。工作流默认执行 namcap，仅此包
 # 显式关闭；该字段由 workflow 以纯文本方式读取，不会 source PKGBUILD。
