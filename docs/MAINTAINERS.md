@@ -28,6 +28,11 @@
 
 ## 相关文档
 
+Clavis 歌词补丁使用公开版本化自定义 `org.cirrus.Lyrics1` D-Bus 接口；协议字段见
+[Cirrus LYRICS_DBUS.md](https://github.com/wxmyyds/CirrusMusic/blob/feat/bili-source-ui-lyrics/LYRICS_DBUS.md)。
+更新补丁时同步检查接口版本、逐字数据保留、关闭导出清理与无鼠标交互的自动换句。
+桌面验证需安装两个新包并完整重启进程；QML 热重载不能替换已加载的原生歌词库。
+
 - [包清单](../PACKAGES.md)
 - [cpkg 使用说明](USAGE.md)
 - [Clavis Shell 补丁维护](../pkgs/clavis-shell/patches/README.md)
