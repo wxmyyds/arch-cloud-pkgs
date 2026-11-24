@@ -7,7 +7,12 @@ on:
         description: '要构建的包，逗号分隔（如: google-chrome,clavis-shell）。留空 = 全部'
         required: false
         type: string
+      publish:
+        description: '发布到 GHCR（仅 main；分支验证只上传 artifact）'
+        type: boolean
+        default: false
   push:
+    branches: [main]
     paths:
       - 'pkgs/**'
       - 'cpkg/**'
@@ -214,6 +219,7 @@ jobs:
           if-no-files-found: error
 
       - name: 发布独立依赖到 GHCR OCI
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish == true)
         env:
           PACKAGE_NAME: ${{ matrix.pkg }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -559,6 +565,7 @@ jobs:
           if-no-files-found: error
 
       - name: 发布包到 GHCR OCI
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish == true)
         env:
           PACKAGE_NAME: ${{ matrix.pkg }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

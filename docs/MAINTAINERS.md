@@ -2,7 +2,10 @@
 
 ## 手动构建
 
-在 GitHub Actions 的 **Build packages** workflow 中指定包名。也可从构建运行下载该包的 `arch-packages-<包名>` artifact；artifact 保留 30 天。成功构建后，包还会发布到 GHCR OCI。
+在 GitHub Actions 的 **Build packages** workflow 中指定包名。也可从构建运行下载该包的 `arch-packages-<包名>` artifact；artifact 保留 30 天。
+
+特性分支只上传 artifact，不发布 GHCR。手动构建的 `publish` 默认关闭；仅在 `main` 明确开启它才会发布。
+`main` 的 push 构建仍在成功后自动发布；特性分支须手动选择包名触发，不构建无关包。
 
 推送包目录或相关构建文件的变更会自动构建受影响的包。构建使用 `archlinux:base-devel`，并运行包元数据检查和 namcap；验证以 Actions 为准，不在本机运行 `makepkg`。
 
@@ -24,6 +27,11 @@
 `build.conf` 支持的字段及工具链配置见 [.github/scripts/prepare-toolchain.sh](../.github/scripts/prepare-toolchain.sh)。workflow 脚本应通过 `env:` 接收 GitHub 上下文，不要将 `${{ }}` 直接插入 shell 命令。
 
 ## 相关文档
+
+Clavis 歌词补丁使用公开版本化自定义 `org.cirrus.Lyrics1` D-Bus 接口；协议字段见
+[Cirrus LYRICS_DBUS.md](https://github.com/wxmyyds/CirrusMusic/blob/feat/bili-source-ui-lyrics/LYRICS_DBUS.md)。
+更新补丁时同步检查接口版本、逐字数据保留、关闭导出清理与无鼠标交互的自动换句。
+桌面验证需安装两个新包并完整重启进程；QML 热重载不能替换已加载的原生歌词库。
 
 - [包清单](../PACKAGES.md)
 - [cpkg 使用说明](USAGE.md)
