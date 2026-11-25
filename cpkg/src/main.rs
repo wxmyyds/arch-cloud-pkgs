@@ -19,6 +19,9 @@ const REGISTRY: &str = "https://ghcr.io";
 const CATALOG_URL: &str = "https://raw.githubusercontent.com/wxmyyds/arch-cloud-pkgs/main/cpkg/packages.json";
 const MANIFEST_ACCEPT: &str = "application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json";
 const PKGINFO_ANNOTATION: &str = "org.wxmyyds.cpkg.pkginfo";
+const MANIFEST_MEDIA_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
+const ARTIFACT_MEDIA_TYPE: &str = "application/vnd.wxmyyds.cpkg.v1";
+const CONFIG_MEDIA_TYPE: &str = "application/vnd.oci.empty.v1+json";
 const LAYER_MEDIA_TYPE: &str = "application/vnd.wxmyyds.cpkg.pkg.v1";
 
 fn client_version() -> &'static str {
@@ -77,9 +80,44 @@ struct Descriptor {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(tag = "mediaType")]
+enum OciDocument {
+    #[serde(rename = "application/vnd.oci.image.manifest.v1+json")]
+    Manifest(Manifest),
+    #[serde(rename = "application/vnd.oci.image.index.v1+json")]
+    Index(ImageIndex),
+}
+
+#[derive(Debug, Deserialize)]
 struct Manifest {
-    annotations: std::collections::HashMap<String, String>,
+    #[serde(rename = "schemaVersion")]
+    schema_version: u32,
+    #[serde(rename = "artifactType")]
+    artifact_type: String,
+    config: Descriptor,
+    annotations: HashMap<String, String>,
     layers: Vec<Descriptor>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImageIndex {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u32,
+    manifests: Vec<IndexDescriptor>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IndexDescriptor {
+    #[serde(flatten)]
+    descriptor: Descriptor,
+    platform: Platform,
+}
+
+#[derive(Debug, Deserialize)]
+struct Platform {
+    os: String,
+    architecture: String,
+    variant: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -208,26 +246,11 @@ impl RegistryClient {
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             bail!("{}", tr!(GhcrVersionNotFound, version = version));
         }
-        let manifest: Manifest = response.error_for_status()?.json().context(tr!(OciManifestFailed))?;
-        let pkginfo = manifest.annotations.get(PKGINFO_ANNOTATION).context(tr!(OciPkginfoMissing))?.clone();
-        let name = pkginfo_field(&pkginfo, "pkgname").context(tr!(PkgNameMissing))?;
-        let version_from_pkginfo = pkginfo_field(&pkginfo, "pkgver").context(tr!(PkgVersionMissing))?;
-        let architecture = pkginfo_field(&pkginfo, "arch").context(tr!(PkgArchitectureMissing))?;
-        let description = pkginfo_field(&pkginfo, "pkgdesc").context(tr!(PkgDescriptionMissing))?;
-        ensure!(name == expected_name, "{}", tr!(PkgNameMismatch, expected = expected_name, actual = name));
-        ensure!(version_from_pkginfo == version, "{}", tr!(PkgVersionMismatch, tag = version, metadata = version_from_pkginfo));
-        ensure!(architecture == "any" || architecture == std::env::consts::ARCH, "{}", tr!(PkgArchitectureMismatch, architecture = architecture));
-        ensure!(manifest.layers.len() == 1, "{}", tr!(OciLayerCount));
-        let descriptor = &manifest.layers[0];
-        ensure!(descriptor.media_type == LAYER_MEDIA_TYPE, "{}", tr!(OciLayerType));
-        validate_digest(&descriptor.digest)?;
-        Ok(PackageMetadata {
-            name,
-            version: version.to_owned(),
-            architecture,
-            description,
-            pkginfo,
-            layer: Layer { digest: descriptor.digest.clone(), size: descriptor.size },
+        let document = response.error_for_status()?.bytes()?;
+        resolve_metadata(&document, version, expected_name, std::env::consts::OS, std::env::consts::ARCH, |descriptor| {
+            let url = format!("{REGISTRY}/v2/{}/manifests/{}", self.repository, descriptor.digest);
+            let response = self.auth(self.http.get(url)).header(ACCEPT, MANIFEST_MEDIA_TYPE).send()?.error_for_status()?;
+            Ok(response.bytes()?.to_vec())
         })
     }
 
@@ -235,7 +258,7 @@ impl RegistryClient {
         let url = format!("{REGISTRY}/v2/{}/blobs/{}", self.repository, metadata.layer.digest);
         let response = self.auth(self.http.get(url)).send()?.error_for_status()?;
         let digest_hex = metadata.layer.digest.strip_prefix("sha256:").context(tr!(DownloadDigestMalformed))?;
-        let filename = format!("{}-{digest_hex}.pacman", metadata.name);
+        let filename = format!("{}-{digest_hex}.pkg.tar.zst", metadata.name);
         let path = directory.join(filename);
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)
             .context(tr!(DownloadFileCreateFailed))?;
@@ -263,6 +286,91 @@ impl RegistryClient {
         ensure!(actual_digest == metadata.layer.digest, "{}", tr!(DownloadDigestMismatch));
         Ok(path)
     }
+}
+
+fn native_oci_architecture(os: &str, arch: &str) -> Result<&'static str> {
+    ensure!(os == "linux", "{}", tr!(OciPlatformUnsupported, os = os, architecture = arch));
+    match arch {
+        "x86_64" => Ok("amd64"),
+        "aarch64" => Ok("arm64"),
+        _ => bail!("{}", tr!(OciPlatformUnsupported, os = os, architecture = arch)),
+    }
+}
+
+fn validate_descriptor(descriptor: &Descriptor, media_type: &str) -> Result<()> {
+    ensure!(descriptor.media_type == media_type && descriptor.size > 0, "{}", tr!(OciDescriptorInvalid));
+    validate_digest(&descriptor.digest)
+}
+
+impl ImageIndex {
+    fn select(&self, os: &str, arch: &str) -> Result<&Descriptor> {
+        let architecture = native_oci_architecture(os, arch)?;
+        ensure!(self.schema_version == 2 && !self.manifests.is_empty(), "{}", tr!(OciIndexInvalid));
+        let mut platforms = HashSet::new();
+        let mut selected = None;
+        // Validate every entry before selecting: a broken index must never become a flat-manifest request.
+        for entry in &self.manifests {
+            validate_descriptor(&entry.descriptor, MANIFEST_MEDIA_TYPE)?;
+            let platform = &entry.platform;
+            ensure!(platform.os == "linux" && matches!(platform.architecture.as_str(), "amd64" | "arm64"), "{}", tr!(OciIndexInvalid));
+            ensure!(platform.variant.is_none() || (platform.architecture == "arm64" && platform.variant.as_deref() == Some("v8")), "{}", tr!(OciIndexInvalid));
+            ensure!(platforms.insert(platform.architecture.as_str()), "{}", tr!(OciIndexAmbiguous));
+            if platform.architecture == architecture {
+                selected = Some(&entry.descriptor);
+            }
+        }
+        selected.with_context(|| tr!(OciIndexPlatformMissing, architecture = architecture))
+    }
+}
+
+fn resolve_metadata(
+    document: &[u8],
+    version: &str,
+    expected_name: &str,
+    os: &str,
+    arch: &str,
+    mut fetch_manifest: impl FnMut(&Descriptor) -> Result<Vec<u8>>,
+) -> Result<PackageMetadata> {
+    native_oci_architecture(os, arch)?;
+    let document: OciDocument = serde_json::from_slice(document).context(tr!(OciManifestFailed))?;
+    let (manifest, indexed) = match document {
+        OciDocument::Manifest(manifest) => (manifest, false),
+        OciDocument::Index(index) => {
+            let descriptor = index.select(os, arch)?;
+            let bytes = fetch_manifest(descriptor)?;
+            ensure!(bytes.len() as u64 == descriptor.size, "{}", tr!(OciChildSizeMismatch));
+            let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+            ensure!(digest == descriptor.digest, "{}", tr!(OciChildDigestMismatch));
+            match serde_json::from_slice(&bytes).context(tr!(OciManifestFailed))? {
+                OciDocument::Manifest(manifest) => (manifest, true),
+                OciDocument::Index(_) => bail!("{}", tr!(OciDescriptorInvalid)),
+            }
+        }
+    };
+    ensure!(manifest.schema_version == 2 && manifest.artifact_type == ARTIFACT_MEDIA_TYPE, "{}", tr!(OciManifestInvalid));
+    validate_descriptor(&manifest.config, CONFIG_MEDIA_TYPE)?;
+    ensure!(manifest.config.size == 2 && manifest.config.digest == format!("sha256:{:x}", Sha256::digest(b"{}")), "{}", tr!(OciManifestInvalid));
+    let pkginfo = manifest.annotations.get(PKGINFO_ANNOTATION).context(tr!(OciPkginfoMissing))?.clone();
+    let name = pkginfo_field(&pkginfo, "pkgname").context(tr!(PkgNameMissing))?;
+    let version_from_pkginfo = pkginfo_field(&pkginfo, "pkgver").context(tr!(PkgVersionMissing))?;
+    let architecture = pkginfo_field(&pkginfo, "arch").context(tr!(PkgArchitectureMissing))?;
+    let description = pkginfo_field(&pkginfo, "pkgdesc").context(tr!(PkgDescriptionMissing))?;
+    ensure!(name == expected_name, "{}", tr!(PkgNameMismatch, expected = expected_name, actual = name));
+    ensure!(version_from_pkginfo == version, "{}", tr!(PkgVersionMismatch, tag = version, metadata = version_from_pkginfo));
+    // Only flat single-file publications can be architecture-independent.
+    ensure!(architecture == arch || (!indexed && architecture == "any"), "{}", tr!(PkgArchitectureMismatch, architecture = architecture));
+    ensure!(manifest.layers.len() == 1, "{}", tr!(OciLayerCount));
+    let descriptor = &manifest.layers[0];
+    ensure!(descriptor.media_type == LAYER_MEDIA_TYPE, "{}", tr!(OciLayerType));
+    validate_descriptor(descriptor, LAYER_MEDIA_TYPE)?;
+    Ok(PackageMetadata {
+        name,
+        version: version.to_owned(),
+        architecture,
+        description,
+        pkginfo,
+        layer: Layer { digest: descriptor.digest.clone(), size: descriptor.size },
+    })
 }
 
 fn next_link(header: &str) -> Option<&str> {
@@ -322,7 +430,7 @@ fn pkginfo_field(pkginfo: &str, key: &str) -> Option<String> {
 
 fn validate_digest(digest: &str) -> Result<()> {
     let hex = digest.strip_prefix("sha256:").context(tr!(DigestUnsupported))?;
-    ensure!(hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()), "{}", tr!(DigestMalformed));
+    ensure!(hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)), "{}", tr!(DigestMalformed));
     Ok(())
 }
 
@@ -850,6 +958,197 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn manifest_fixture(arch: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": MANIFEST_MEDIA_TYPE,
+            "artifactType": ARTIFACT_MEDIA_TYPE,
+            "config": {
+                "mediaType": CONFIG_MEDIA_TYPE,
+                "digest": format!("sha256:{:x}", Sha256::digest(b"{}")),
+                "size": 2
+            },
+            "annotations": {
+                "org.wxmyyds.cpkg.pkginfo": format!("pkgname = cirrus\npkgver = 1:2.0-3\narch = {arch}\npkgdesc = Cirrus Music\n")
+            },
+            "layers": [{"mediaType": LAYER_MEDIA_TYPE, "digest": format!("sha256:{}", "a".repeat(64)), "size": 100}]
+        })).unwrap()
+    }
+
+    fn index_entry(architecture: &str, leaf: &[u8]) -> serde_json::Value {
+        serde_json::json!({
+            "mediaType": MANIFEST_MEDIA_TYPE,
+            "digest": format!("sha256:{:x}", Sha256::digest(leaf)),
+            "size": leaf.len(),
+            "platform": {"os": "linux", "architecture": architecture}
+        })
+    }
+
+    fn index_fixture(entries: Vec<serde_json::Value>) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": entries
+        })).unwrap()
+    }
+
+    #[test]
+    fn index_resolves_only_the_requested_native_leaf_by_digest() {
+        let x86 = manifest_fixture("x86_64");
+        let arm = manifest_fixture("aarch64");
+        let entries = vec![index_entry("amd64", &x86), index_entry("arm64", &arm)];
+        let document = index_fixture(entries.clone());
+        for (arch, leaf, entry) in [("x86_64", &x86, &entries[0]), ("aarch64", &arm, &entries[1])] {
+            let mut requests = 0;
+            let metadata = resolve_metadata(&document, "1:2.0-3", "cirrus", "linux", arch, |descriptor| {
+                requests += 1;
+                assert_eq!(descriptor.digest, entry["digest"].as_str().unwrap());
+                assert_eq!(descriptor.size, leaf.len() as u64);
+                Ok(leaf.clone())
+            }).unwrap();
+            assert_eq!(requests, 1);
+            assert_eq!(metadata.architecture, arch);
+            assert_eq!(metadata.name, "cirrus");
+        }
+    }
+
+    #[test]
+    fn index_missing_native_architecture_never_fetches_another_architecture() {
+        let document = index_fixture(vec![index_entry("amd64", &manifest_fixture("x86_64"))]);
+        assert!(resolve_metadata(&document, "1:2.0-3", "cirrus", "linux", "aarch64", |_| {
+            panic!("missing native platform must fail before fetching a leaf")
+        }).is_err());
+    }
+
+    #[test]
+    fn index_rejects_wrong_unknown_or_missing_platforms() {
+        let entry = index_entry("arm64", &manifest_fixture("aarch64"));
+        let mut wrong_os = entry.clone();
+        wrong_os["platform"]["os"] = "windows".into();
+        let mut unknown_arch = entry.clone();
+        unknown_arch["platform"]["architecture"] = "unknown".into();
+        let mut any_arch = entry.clone();
+        any_arch["platform"]["architecture"] = "any".into();
+        let mut missing = entry.clone();
+        missing.as_object_mut().unwrap().remove("platform");
+        let mut wrong_variant = entry;
+        wrong_variant["platform"]["variant"] = "v7".into();
+        for invalid in [wrong_os, unknown_arch, any_arch, missing, wrong_variant] {
+            let document = index_fixture(vec![invalid]);
+            assert!(resolve_metadata(&document, "1:2.0-3", "cirrus", "linux", "aarch64", |_| {
+                panic!("invalid platform must fail before fetching")
+            }).is_err());
+        }
+    }
+
+    #[test]
+    fn index_rejects_ambiguous_platforms_including_arm64_variants() {
+        let entry = index_entry("arm64", &manifest_fixture("aarch64"));
+        let mut variant = entry.clone();
+        variant["platform"]["variant"] = "v8".into();
+        for duplicate in [entry.clone(), variant] {
+            let document = index_fixture(vec![entry.clone(), duplicate]);
+            assert!(resolve_metadata(&document, "1:2.0-3", "cirrus", "linux", "aarch64", |_| {
+                panic!("ambiguous platform must fail before fetching")
+            }).is_err());
+        }
+    }
+
+    #[test]
+    fn index_validates_all_descriptors_and_never_decodes_a_malformed_index_as_flat() {
+        let entry = index_entry("amd64", &manifest_fixture("x86_64"));
+        let mut wrong_type = entry.clone();
+        wrong_type["mediaType"] = LAYER_MEDIA_TYPE.into();
+        let mut bad_digest = entry.clone();
+        bad_digest["digest"] = "sha256:bad".into();
+        let mut empty = entry.clone();
+        empty["size"] = 0.into();
+        let mut missing_size = entry.clone();
+        missing_size.as_object_mut().unwrap().remove("size");
+        let mut invalid_documents = vec![index_fixture(vec![])];
+        for invalid in [wrong_type, bad_digest, empty, missing_size] {
+            // The requested valid entry cannot hide a broken descriptor for another platform.
+            invalid_documents.push(index_fixture(vec![index_entry("arm64", &manifest_fixture("aarch64")), invalid]));
+        }
+        let mut schema: serde_json::Value = serde_json::from_slice(&index_fixture(vec![entry])).unwrap();
+        schema["schemaVersion"] = 1.into();
+        invalid_documents.push(serde_json::to_vec(&schema).unwrap());
+        schema.as_object_mut().unwrap().remove("manifests");
+        schema["layers"] = serde_json::json!([]);
+        invalid_documents.push(serde_json::to_vec(&schema).unwrap());
+        for document in invalid_documents {
+            assert!(resolve_metadata(&document, "1:2.0-3", "cirrus", "linux", "aarch64", |_| {
+                panic!("malformed index must fail before fetching")
+            }).is_err());
+        }
+    }
+
+    #[test]
+    fn index_verifies_fetched_manifest_size_and_digest_before_decoding() {
+        let leaf = manifest_fixture("aarch64");
+        let document = index_fixture(vec![index_entry("arm64", &leaf)]);
+        let mut same_size_wrong_digest = leaf.clone();
+        same_size_wrong_digest[0] = b' ';
+        for invalid in [Vec::new(), same_size_wrong_digest] {
+            assert!(resolve_metadata(&document, "1:2.0-3", "cirrus", "linux", "aarch64", |_| Ok(invalid.clone())).is_err());
+        }
+    }
+
+    #[test]
+    fn index_rejects_leaf_media_type_nested_index_and_architecture_mismatch() {
+        let mut wrong_type: serde_json::Value = serde_json::from_slice(&manifest_fixture("aarch64")).unwrap();
+        wrong_type["mediaType"] = "application/json".into();
+        for leaf in [
+            manifest_fixture("x86_64"),
+            manifest_fixture("any"),
+            index_fixture(vec![index_entry("arm64", &manifest_fixture("aarch64"))]),
+            serde_json::to_vec(&wrong_type).unwrap(),
+        ] {
+            let document = index_fixture(vec![index_entry("arm64", &leaf)]);
+            assert!(resolve_metadata(&document, "1:2.0-3", "cirrus", "linux", "aarch64", |_| Ok(leaf.clone())).is_err());
+        }
+    }
+
+    #[test]
+    fn flat_manifests_preserve_single_file_and_architecture_independent_packages() {
+        for (host, package) in [("x86_64", "x86_64"), ("aarch64", "aarch64"), ("x86_64", "any"), ("aarch64", "any")] {
+            let metadata = resolve_metadata(&manifest_fixture(package), "1:2.0-3", "cirrus", "linux", host, |_| {
+                panic!("flat manifest must not fetch a child")
+            }).unwrap();
+            assert_eq!(metadata.architecture, package);
+        }
+        assert!(resolve_metadata(&manifest_fixture("x86_64"), "1:2.0-3", "cirrus", "linux", "aarch64", |_| unreachable!()).is_err());
+        assert!(resolve_metadata(&manifest_fixture("aarch64"), "1:2.0-3", "wrong-name", "linux", "aarch64", |_| unreachable!()).is_err());
+        assert!(resolve_metadata(&manifest_fixture("aarch64"), "2.0-3", "cirrus", "linux", "aarch64", |_| unreachable!()).is_err());
+    }
+
+    #[test]
+    fn flat_manifests_reject_invalid_schema_config_and_layers() {
+        let valid: serde_json::Value = serde_json::from_slice(&manifest_fixture("x86_64")).unwrap();
+        for (field, value) in [
+            ("schemaVersion", serde_json::json!(1)),
+            ("mediaType", serde_json::json!("application/json")),
+            ("artifactType", serde_json::json!("unknown")),
+            ("config", serde_json::json!({"mediaType": CONFIG_MEDIA_TYPE, "digest": format!("sha256:{}", "a".repeat(64)), "size": 2})),
+            ("layers", serde_json::json!([])),
+            ("layers", serde_json::json!([{"mediaType": LAYER_MEDIA_TYPE, "digest": "sha256:bad", "size": 100}])),
+            ("layers", serde_json::json!([{"mediaType": LAYER_MEDIA_TYPE, "digest": format!("sha256:{}", "a".repeat(64)), "size": 0}])),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            assert!(resolve_metadata(&serde_json::to_vec(&invalid).unwrap(), "1:2.0-3", "cirrus", "linux", "x86_64", |_| unreachable!()).is_err());
+        }
+    }
+
+    #[test]
+    fn client_platform_support_is_explicit() {
+        assert_eq!(native_oci_architecture("linux", "x86_64").unwrap(), "amd64");
+        assert_eq!(native_oci_architecture("linux", "aarch64").unwrap(), "arm64");
+        for (os, arch) in [("windows", "x86_64"), ("linux", "riscv64"), ("unknown", "unknown")] {
+            assert!(resolve_metadata(&manifest_fixture("any"), "1:2.0-3", "cirrus", os, arch, |_| unreachable!()).is_err());
+        }
+    }
+
     #[test]
     fn pacman_style_confirmation_defaults_to_yes() {
         assert!(confirmation_accepts(""));
@@ -1020,6 +1319,7 @@ mod tests {
     #[test]
     fn rejects_invalid_digests() {
         assert!(validate_digest("sha256:xyz").is_err());
+        assert!(validate_digest(&format!("sha256:{}", "A".repeat(64))).is_err());
         assert!(validate_digest(&format!("sha256:{}", "a".repeat(64))).is_ok());
     }
 }
