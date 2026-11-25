@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Delete consumed intermediate packages from this workflow run only.
+# Delete arch-cloud-pkgs intermediate packages from its current workflow run.
 # The caller must wait for every consumer and publisher to succeed.
 set -euo pipefail
 
 [[ ${GITHUB_ACTIONS:-} == true ]] || { echo 'Run artifact cleanup through GitHub Actions' >&2; exit 1; }
 : "${GITHUB_REPOSITORY:?}" "${GITHUB_RUN_ID:?}" "${GH_TOKEN:?}" "${GITHUB_STEP_SUMMARY:?}"
-prefix=${1:?usage: cleanup-run-artifacts.sh <artifact-name-prefix>}
-[[ $GITHUB_RUN_ID =~ ^[0-9]+$ && $prefix =~ ^[a-z0-9][a-z0-9-]*-$ ]] || {
-    echo 'Invalid workflow run or artifact prefix' >&2
+prefix=arch-packages-
+[[ $GITHUB_REPOSITORY == wxmyyds/arch-cloud-pkgs && $GITHUB_RUN_ID =~ ^[0-9]+$ ]] || {
+    echo 'Artifact cleanup is restricted to an arch-cloud-pkgs workflow run' >&2
     exit 1
 }
 

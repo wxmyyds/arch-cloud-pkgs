@@ -606,4 +606,4 @@ jobs:
       - name: Delete consumed intermediate packages
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/cleanup-run-artifacts.sh arch-packages-
+        run: bash .github/scripts/cleanup-run-artifacts.sh

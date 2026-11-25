@@ -4,7 +4,7 @@
 
 在 GitHub Actions 的 **Build packages** workflow 中指定包名。验证构建的 `arch-packages-<包名>` artifact 保留 1 天，请及时下载。主线完成全部构建和 GHCR 发布后，独立清理 job 删除本次运行的中转包；失败或取消的运行保留产物至到期，便于诊断和重跑。
 
-清理统一使用 `.github/scripts/cleanup-run-artifacts.sh`，仅删除调用工作流当前运行中指定前缀的 artifact；Cirrus Release 也调用同一脚本。清理在所有消费方成功后运行，不删除 GHCR 包、Release 资产或缓存。
+`.github/scripts/cleanup-run-artifacts.sh` 仅用于本仓库，固定清理当前运行的 `arch-packages-*` artifact，并拒绝在其他仓库运行。清理在依赖安装、全部构建和发布成功后执行，不删除 GHCR 包、Release 资产或缓存。
 
 特性分支只上传 artifact，不发布 GHCR。手动构建的 `publish` 默认关闭；仅在 `main` 明确开启它才会发布。
 `main` 的 push 构建仍在成功后自动发布；特性分支须手动选择包名触发，不构建无关包。
