@@ -2,20 +2,22 @@
 
 ## 手动构建
 
-在 GitHub Actions 的 **Build packages** workflow 中指定包名。也可从构建运行下载该包的 `arch-packages-<包名>` artifact；artifact 保留 30 天。
+在 GitHub Actions 的 **Build packages** workflow 中指定包名。验证构建的 `arch-packages-<包名>` artifact 保留 1 天，请及时下载。主线完成全部构建和 GHCR 发布后，独立清理 job 删除本次运行的中转包；失败或取消的运行保留产物至到期，便于诊断和重跑。
+
+清理统一使用 `.github/scripts/cleanup-run-artifacts.sh`，仅删除调用工作流当前运行中指定前缀的 artifact；Cirrus Release 也调用同一脚本。清理在所有消费方成功后运行，不删除 GHCR 包、Release 资产或缓存。
 
 特性分支只上传 artifact，不发布 GHCR。手动构建的 `publish` 默认关闭；仅在 `main` 明确开启它才会发布。
 `main` 的 push 构建仍在成功后自动发布；特性分支须手动选择包名触发，不构建无关包。
 
 推送包目录或相关构建文件的变更会自动构建受影响的包。构建使用 `archlinux:base-devel`，并运行包元数据检查和 namcap；收集、依赖安装和 artifact 均使用标准 `.pkg.tar.zst`，不再改名。验证以 Actions 为准，不在本机运行 `makepkg`。该操作需要通过 GitHub Actions 执行。
 
-`Build cpkg client` 在 x86_64 和 aarch64 原生 Ubuntu runner 上执行 Rust 格式化、单元测试、Clippy 和编译，并分别上传客户端二进制。`pkgs/cpkg/PKGBUILD` 声明这两个架构，但 `Build packages` 目前仍只有 x86_64 Arch 包构建；aarch64 客户端先通过二进制 artifact 提供，不能据此宣称云端 cpkg 自更新包或其他第三方包已经支持 ARM。
+`Build cpkg client` 在 x86_64 和 aarch64 原生 Ubuntu runner 上执行 Rust 格式化、单元测试、Clippy 和编译，并分别上传保留 1 天的客户端二进制。`pkgs/cpkg/PKGBUILD` 声明这两个架构，但 `Build packages` 目前仍只有 x86_64 Arch 包构建；aarch64 客户端先通过二进制 artifact 提供，不能据此宣称云端 cpkg 自更新包或其他第三方包已经支持 ARM。
 
 ## 上游更新
 
 `.github/nvchecker.toml` 声明各包的上游版本来源，`.github/workflows/check-updates.yml` 每日 `05:23 UTC` 运行检查。有更新时只触发对应包构建；版本基线仅在所有条目都成功取到版本后推进。
 
-手动运行检查 workflow 时 `dry_run` 默认开启，只报告结果。正式构建时，版本和校验值仍由对应 `PKGBUILD` 解析并验证；nvchecker 结果只用于发现变化。
+手动运行检查 workflow 时 `dry_run` 默认开启，只报告结果；更新检测报告保留 3 天。正式构建时，版本和校验值仍由对应 `PKGBUILD` 解析并验证；nvchecker 结果只用于发现变化。
 
 ## 新增或修改包
 

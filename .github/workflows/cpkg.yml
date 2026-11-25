@@ -44,5 +44,6 @@ jobs:
         with:
           name: cpkg-${{ matrix.arch }}-linux
           path: cpkg/target/release/cpkg
-          retention-days: 30
+          retention-days: 1
+          overwrite: ${{ github.run_attempt > 1 }}
           if-no-files-found: error

@@ -113,5 +113,6 @@ jobs:
           path: |
             .github/nvchecker/newver.json
             .github/nvchecker/oldver.json
-          retention-days: 14
+          retention-days: 3
+          overwrite: ${{ github.run_attempt > 1 }}
           if-no-files-found: warn

@@ -8,11 +8,11 @@ on:
         required: false
         type: string
       clavis_ref:
-        description: 'Clavis fork 源码分支；非 main 仅用于 artifact 验证'
+        description: 'Clavis fork 源码分支；非 main 仅用于构建和发布 dry-run'
         type: string
         default: main
       publish:
-        description: '发布到 GHCR（仅 main；分支验证只上传 artifact）'
+        description: '发布到 GHCR（仅 main；分支验证不发布，产物保留 1 天）'
         type: boolean
         default: false
   push:
@@ -64,7 +64,7 @@ jobs:
           set -euo pipefail
           git check-ref-format "refs/heads/$INPUT_CLAVIS_REF" >/dev/null
           if [[ "$INPUT_CLAVIS_REF" != main && "$INPUT_PUBLISH" == true ]]; then
-            echo '::error::Clavis feature source refs are artifact-only; publish must be false'
+            echo '::error::Clavis feature source refs are validation-only; publish must be false'
             exit 1
           fi
           all_pkgs() {
@@ -225,7 +225,8 @@ jobs:
         with:
           name: arch-packages-${{ matrix.pkg }}
           path: pkgs/${{ matrix.pkg }}/*.pkg.tar.zst
-          retention-days: 30
+          retention-days: 1
+          overwrite: ${{ github.run_attempt > 1 }}
           if-no-files-found: error
 
       - name: 校验并按需发布独立依赖到 GHCR OCI
@@ -565,7 +566,8 @@ jobs:
           path: |
             pkgs/${{ matrix.pkg }}/*.pkg.tar.zst
             pkgs/${{ matrix.pkg }}/extra_artifacts/*
-          retention-days: 30
+          retention-days: 1
+          overwrite: ${{ github.run_attempt > 1 }}
           if-no-files-found: error
 
       - name: 校验并按需发布包到 GHCR OCI
@@ -582,3 +584,26 @@ jobs:
             PACKAGE_NAME="$(bsdtar -xOf "$file" .PKGINFO | awk -F ' = ' '$1 == "pkgname" { print $2; exit }')" \
               bash .github/scripts/publish-oci-package.sh "$file"
           done
+
+  cleanup:
+    name: Remove consumed package artifacts
+    needs: [select, build-aux, build]
+    if: >-
+      ${{ always() && !cancelled() && needs.select.result == 'success' &&
+          (needs.build-aux.result == 'success' || needs.build-aux.result == 'skipped') &&
+          (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+          github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish == true) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Delete consumed intermediate packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/cleanup-run-artifacts.sh arch-packages-
