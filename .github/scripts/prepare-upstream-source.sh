@@ -6,9 +6,16 @@ repo="${1:?usage: prepare-upstream-source.sh OWNER/REPO PKGBASE PACKAGE_DIRECTOR
 pkgbase="${2:?usage: prepare-upstream-source.sh OWNER/REPO PKGBASE PACKAGE_DIRECTORY}"
 dest="${3:?usage: prepare-upstream-source.sh OWNER/REPO PKGBASE PACKAGE_DIRECTORY}"
 case "$repo:$pkgbase" in
-    StatIndet/quickshell:clavis-shell|StatIndet/key-cli:key-cli) ;;
+    wxmyyds/quickshell:clavis-shell|StatIndet/key-cli:key-cli) ;;
     *) printf 'Unsupported upstream package mapping: %s:%s\n' "$repo" "$pkgbase" >&2; exit 2 ;;
 esac
+
+source_ref="${4:-main}"
+git check-ref-format "refs/heads/$source_ref" >/dev/null || { echo 'Invalid source ref' >&2; exit 2; }
+if [[ "$pkgbase" == key-cli && "$source_ref" != main ]]; then
+    echo 'key-cli builds must use upstream main' >&2
+    exit 2
+fi
 
 build_date="${BUILD_DATE:-$(TZ=Asia/Shanghai date +%F)}"
 run_number="${GITHUB_RUN_NUMBER:-1}"
@@ -21,32 +28,11 @@ source_dir="$work_root/source"
 output_dir="$work_root/package"
 mkdir -p "$output_dir"
 
-git clone --depth=1 --branch main "https://github.com/${repo}.git" "$source_dir"
+git clone --depth=1 --branch "$source_ref" "https://github.com/${repo}.git" "$source_dir"
 git -C "$source_dir" fetch --tags --force
 source_commit="$(git -C "$source_dir" rev-parse --short HEAD)"
 
-# 应用包目录下的本地补丁（patches/*.patch）。必须在 git clone 之后、
-# release.py source --working-tree 之前执行：源码包按工作树内容打包，
-# 因此补丁会被烘焙进 tarball，最终编译进安装包，运行期无需任何手工改动。
-patch_dir="$(realpath -m -- "$dest/patches")"
-if [[ -d "$patch_dir" ]]; then
-    shopt -s nullglob
-    patch_files=("$patch_dir"/*.patch)
-    shopt -u nullglob
-    for patch_file in ${patch_files[@]+"${patch_files[@]}"}; do
-        name="$(basename "$patch_file")"
-        if git -C "$source_dir" apply --check "$patch_file" 2>/dev/null; then
-            printf 'Applying patch %s\n' "$name"
-            git -C "$source_dir" apply "$patch_file"
-        elif git -C "$source_dir" apply --reverse --check "$patch_file" 2>/dev/null; then
-            printf 'Patch %s already applied upstream (commit %s), skipping\n' "$name" "$source_commit"
-        else
-            printf 'Patch %s does not apply to upstream %s; refresh %s\n' \
-                "$name" "$source_commit" "$patch_file" >&2
-            exit 1
-        fi
-    done
-fi
+# Fork changes live in the selected source commit; no packaging patch layer.
 
 chown -R builder:builder "$work_root"
 
@@ -66,5 +52,5 @@ for helper in "$output_dir"/*.install "$output_dir"/*.hook; do
     cp -f "$helper" "$dest/"
 done
 chown -R builder:builder "$dest" /opt/cache/sources
-printf 'Prepared %s from main commit %s as %s-%s (pkgrel %s)\n' \
-    "$pkgbase" "$source_commit" "$pkgbase" "$version" "$run_number"
+printf 'Prepared %s from %s ref %s commit %s as %s-%s (pkgrel %s)\n' \
+    "$pkgbase" "$repo" "$source_ref" "$source_commit" "$pkgbase" "$version" "$run_number"

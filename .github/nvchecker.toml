@@ -51,7 +51,7 @@ use_latest_release = true
 # 而不是 release tag——上游发版并不覆盖所有提交。
 [clavis-shell]
 source = "github"
-github = "StatIndet/quickshell"
+github = "wxmyyds/quickshell"
 branch = "main"
 
 [key-cli]

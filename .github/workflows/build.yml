@@ -7,6 +7,10 @@ on:
         description: '要构建的包，逗号分隔（如: google-chrome,clavis-shell）。留空 = 全部'
         required: false
         type: string
+      clavis_ref:
+        description: 'Clavis fork 源码分支；非 main 仅用于 artifact 验证'
+        type: string
+        default: main
       publish:
         description: '发布到 GHCR（仅 main；分支验证只上传 artifact）'
         type: boolean
@@ -53,9 +57,16 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_PKGS: ${{ inputs.packages }}
+          INPUT_CLAVIS_REF: ${{ inputs.clavis_ref || 'main' }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
           BEFORE_SHA: ${{ github.event.before }}
         run: |
           set -euo pipefail
+          git check-ref-format "refs/heads/$INPUT_CLAVIS_REF" >/dev/null
+          if [[ "$INPUT_CLAVIS_REF" != main && "$INPUT_PUBLISH" == true ]]; then
+            echo '::error::Clavis feature source refs are artifact-only; publish must be false'
+            exit 1
+          fi
           all_pkgs() {
             # 列出全部包目录；没有包时返回空（不用 ls | xargs，避免空输入时
             # xargs 无参执行 basename 报 usage）
@@ -467,12 +478,13 @@ jobs:
           NDK_PLATFORM: ${{ steps.conf.outputs.ndk_platform }}
           CPKG_SOURCE_SHA: ${{ github.sha }}
           CPKG_BUILD_NUMBER: ${{ github.run_number }}
+          CLAVIS_SOURCE_REF: ${{ inputs.clavis_ref || 'main' }}
         run: |
           set -euo pipefail
           d="pkgs/$PKG"
           echo "::group::构建 $PKG"
           if [ "$PKG" = "clavis-shell" ]; then
-            bash .github/scripts/prepare-upstream-source.sh StatIndet/quickshell clavis-shell "$d"
+            bash .github/scripts/prepare-upstream-source.sh wxmyyds/quickshell clavis-shell "$d" "$CLAVIS_SOURCE_REF"
           elif [ "$PKG" = "key-cli" ]; then
             bash .github/scripts/prepare-upstream-source.sh StatIndet/key-cli key-cli "$d"
           fi

@@ -28,11 +28,20 @@
 
 ## 相关文档
 
-Clavis 歌词补丁使用公开版本化自定义 `org.cirrus.Lyrics1` D-Bus 接口；协议字段见
-[Cirrus LYRICS_DBUS.md](https://github.com/wxmyyds/CirrusMusic/blob/feat/bili-source-ui-lyrics/LYRICS_DBUS.md)。
-更新补丁时同步检查接口版本、逐字数据保留、关闭导出清理与无鼠标交互的自动换句。
-桌面验证需安装两个新包并完整重启进程；QML 热重载不能替换已加载的原生歌词库。
+Clavis 从自维护 [wxmyyds/quickshell](https://github.com/wxmyyds/quickshell) 的 `main` 构建，
+源码修改直接提交 fork，不再维护或叠加 `pkgs/clavis-shell/patches`。`key-cli` 仍从 `StatIndet/key-cli` 构建。
+自动更新检测同样跟踪 fork 的 `main`；更换来源时保留当前相同提交的版本基线，不伪造尚未合并的版本。
+
+手动构建 `clavis-shell` 可设置 `clavis_ref` 为 fork 特性分支并保持 `publish=false`，
+用于在 fork PR 合并前验证源码、测试及包；该输入不改变正式跟踪源，非 main 源码禁止发布。
+应先验证并合并 fork PR，再合并本仓库来源迁移 PR，正式构建仍使用 fork 的 `main`。
+
+歌词使用 Cirrus 上游 Unix socket v1 协议；字段和发现清单见
+[Cirrus now-playing](https://github.com/wxmyyds/CirrusMusic/tree/master/tools/now-playing)。
+验证需覆盖逐字数据保留、B 站字幕、关闭导出清理和无鼠标交互的自动换句。
+只有发现清单会从运行时目录读取，歌词正文通过 socket 获取，不使用歌词文件或联网脚本。
+桌面验证需安装 Cirrus 和 Clavis 两个新包并重启进程；QML 热重载不能替换原生歌词库。
 
 - [包清单](../PACKAGES.md)
 - [cpkg 使用说明](USAGE.md)
-- [Clavis Shell 补丁维护](../pkgs/clavis-shell/patches/README.md)
+- [Clavis Shell fork](https://github.com/wxmyyds/quickshell)
