@@ -8,11 +8,11 @@ on:
         required: false
         type: string
       clavis_ref:
-        description: 'Clavis fork 源码分支；非 main 仅用于 artifact 验证'
+        description: 'Clavis fork 源码分支；非 main 仅用于构建和发布 dry-run'
         type: string
         default: main
       publish:
-        description: '发布到 GHCR（仅 main；分支验证只上传 artifact）'
+        description: '发布到 GHCR（仅 main；分支验证不发布，产物保留 1 天）'
         type: boolean
         default: false
   push:
@@ -64,7 +64,7 @@ jobs:
           set -euo pipefail
           git check-ref-format "refs/heads/$INPUT_CLAVIS_REF" >/dev/null
           if [[ "$INPUT_CLAVIS_REF" != main && "$INPUT_PUBLISH" == true ]]; then
-            echo '::error::Clavis feature source refs are artifact-only; publish must be false'
+            echo '::error::Clavis feature source refs are validation-only; publish must be false'
             exit 1
           fi
           all_pkgs() {
@@ -217,26 +217,25 @@ jobs:
             echo "::error::预期一个 $PKG 包，实际 ${#files[@]} 个"
             exit 1
           fi
-          mv "${files[0]}" "${files[0]%.pkg.tar.zst}.pacman"
-          pacman -Qip "$d"/*.pacman
-          namcap "$d"/*.pacman
+          pacman -Qip "${files[0]}"
+          namcap "${files[0]}"
 
       - name: 上传独立依赖包产物
         uses: actions/upload-artifact@v5
         with:
           name: arch-packages-${{ matrix.pkg }}
-          path: pkgs/${{ matrix.pkg }}/*.pacman
-          retention-days: 30
+          path: pkgs/${{ matrix.pkg }}/*.pkg.tar.zst
+          retention-days: 1
+          overwrite: ${{ github.run_attempt > 1 }}
           if-no-files-found: error
 
-      - name: 发布独立依赖到 GHCR OCI
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish == true)
+      - name: 校验并按需发布独立依赖到 GHCR OCI
         env:
           PACKAGE_NAME: ${{ matrix.pkg }}
+          PUBLISH: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish == true) }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PACKAGE_FILE="pkgs/$PACKAGE_NAME/$(basename pkgs/$PACKAGE_NAME/*.pacman)" \
-            bash .github/scripts/publish-oci-package.sh
+          bash .github/scripts/publish-oci-package.sh "pkgs/$PACKAGE_NAME"/*.pkg.tar.zst
 
   # 常规包独立 matrix；clavis-shell 依赖上方 key-cli/AUR 产物。
   build:
@@ -298,8 +297,8 @@ jobs:
         if: matrix.pkg == 'clavis-shell'
         run: |
           shopt -s nullglob
-          key_cli=(aux-deps/key-cli/key-cli-*.pacman)
-          files=(aux-deps/libcava/*.pacman aux-deps/qt6-m3shapes-git/*.pacman)
+          key_cli=(aux-deps/key-cli/key-cli-*.pkg.tar.zst)
+          files=(aux-deps/libcava/*.pkg.tar.zst aux-deps/qt6-m3shapes-git/*.pkg.tar.zst)
           if [ "${#key_cli[@]}" -ne 1 ] || [ "${#files[@]}" -ne 2 ]; then
             echo "::error::Clavis 缺少 key-cli 或 AUR 运行库产物"
             exit 1
@@ -516,13 +515,7 @@ jobs:
           if [ "$PKG" = "key-cli" ]; then
             rm -f "$d"/key-cli-keyboard-access-*.pkg.tar.zst "$d"/key-cli-cpu-power-access-*.pkg.tar.zst
           fi
-          # 产物改用 .pacman 扩展名（与 fpm/tauri/electron-builder 约定一致），
-          # 本质仍为标准 pacman 包，pacman -U 可直接安装
-          shopt -s nullglob
-          for f in "$d"/*.pkg.tar.zst; do
-            mv "$f" "${f%.pkg.tar.zst}.pacman"
-          done
-          # 收集 build.conf 声明的额外产物（.pacman 之外需要一并上传的文件）供上传
+          # 收集 build.conf 声明的额外产物（.pkg.tar.zst 之外需要一并上传的文件）供上传
           if [ -n "$EXTRA_ARTIFACTS" ]; then
             mkdir -p "$d/extra_artifacts"
             # shellcheck disable=SC2086  # 需要按空格拆分成多个文件名
@@ -546,9 +539,9 @@ jobs:
           set -euo pipefail
           d="pkgs/$PKG"
           shopt -s nullglob
-          files=("$d"/*.pacman)
+          files=("$d"/*.pkg.tar.zst)
           if [ "${#files[@]}" -eq 0 ]; then
-            echo "::error::没有生成 .pacman 包产物"
+            echo "::error::没有生成 .pkg.tar.zst 包产物"
             exit 1
           fi
           echo "::group::产物元信息 $PKG"
@@ -571,21 +564,46 @@ jobs:
         with:
           name: arch-packages-${{ matrix.pkg }}
           path: |
-            pkgs/${{ matrix.pkg }}/*.pacman
+            pkgs/${{ matrix.pkg }}/*.pkg.tar.zst
             pkgs/${{ matrix.pkg }}/extra_artifacts/*
-          retention-days: 30
+          retention-days: 1
+          overwrite: ${{ github.run_attempt > 1 }}
           if-no-files-found: error
 
-      - name: 发布包到 GHCR OCI
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish == true)
+      - name: 校验并按需发布包到 GHCR OCI
         env:
           PACKAGE_NAME: ${{ matrix.pkg }}
+          PUBLISH: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish == true) }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           pacman -S --needed --noconfirm curl jq
           shopt -s nullglob
-          files=("pkgs/$PACKAGE_NAME"/*.pacman)
+          files=("pkgs/$PACKAGE_NAME"/*.pkg.tar.zst)
           for file in "${files[@]}"; do
-            PACKAGE_FILE="$file" PACKAGE_NAME="$(bsdtar -xOf "$file" .PKGINFO | awk -F ' = ' '$1 == "pkgname" { print $2; exit }')" bash .github/scripts/publish-oci-package.sh
+            PACKAGE_NAME="$(bsdtar -xOf "$file" .PKGINFO | awk -F ' = ' '$1 == "pkgname" { print $2; exit }')" \
+              bash .github/scripts/publish-oci-package.sh "$file"
           done
+
+  cleanup:
+    name: Remove consumed package artifacts
+    needs: [select, build-aux, build]
+    if: >-
+      ${{ always() && !cancelled() && needs.select.result == 'success' &&
+          (needs.build-aux.result == 'success' || needs.build-aux.result == 'skipped') &&
+          (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+          github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish == true) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Delete consumed intermediate packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/cleanup-run-artifacts.sh

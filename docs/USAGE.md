@@ -35,13 +35,18 @@ cpkg -Syu
 **通过 Actions artifact**：从对应构建运行下载包文件，然后安装：
 
 ```sh
-sudo pacman -U *.pacman
+sudo pacman -U *.pkg.tar.zst
 ```
 
 手动安装 Clavis 时需要同时下载其四个包的 artifact。`key-cli` 包只含 CLI，不含需单独授权的键盘/CPU 权限包。
 
+客户端只支持 Linux x86_64 和 aarch64。多架构版本通过 OCI index 精确选择当前架构，并校验 leaf manifest 的类型、大小和 SHA-256；缺少架构、重复条目或元数据错误会失败，不会选择其他架构。单文件发布仍使用原生 OCI manifest，允许原生架构或 `any` 包。下载文件统一保留标准 `.pkg.tar.zst` 后缀。
+
+**ARM 客户端**：`Build cpkg client` Actions 同时提供 `cpkg-x86_64-linux` 和 `cpkg-aarch64-linux` 原生二进制 artifact。`Build packages` 目前仍只在 x86_64 Arch 容器构建，所以 GHCR 的 `cpkg` 自更新包尚未提供 aarch64；ARM 用户可先使用对应客户端 artifact。其他包是否支持 ARM 取决于各包实际发布的架构。
+
 ## 包特定说明
 
+- Cirrus 尚未首发，当前未加入 cpkg 可安装目录。其 x86_64 和 aarch64 Arch 包将只由 CirrusMusic 上游 Release 构建，再经本仓库统一发布器上传；成功发布并确认可匿名拉取后才启用目录条目。本仓库不重编译 Cirrus。
 - `dux-files` 运行时依赖官方仓库的 `quickshell` 和 `qt6-declarative`；PDF 预览可选装 `qt6-webengine`。用户服务可用 `systemctl --user enable --now dfiles` 启用。
 - `wechat` 目前只提供 x86_64 包，由官方 AppImage 重打包；不需要 FUSE。
 - 客户端语言按 `LC_ALL`、`LC_MESSAGES`、`LANG` 顺序选择；简体中文 locale 显示中文，其他情况显示英文。

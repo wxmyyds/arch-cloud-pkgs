@@ -12,7 +12,14 @@ permissions:
 
 jobs:
   test-build:
-    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
@@ -35,7 +42,8 @@ jobs:
 
       - uses: actions/upload-artifact@v5
         with:
-          name: cpkg-x86_64-linux
+          name: cpkg-${{ matrix.arch }}-linux
           path: cpkg/target/release/cpkg
-          retention-days: 30
+          retention-days: 1
+          overwrite: ${{ github.run_attempt > 1 }}
           if-no-files-found: error

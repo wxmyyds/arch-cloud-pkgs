@@ -19,7 +19,7 @@
 # 与本包同装会争用 /usr/bin/dfiles，故 conflicts。
 
 pkgname=dux-files
-pkgrel=1
+pkgrel=2
 
 _dux_latest_tag() {
     local tag

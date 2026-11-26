@@ -15,7 +15,7 @@
 # 显式关闭；该字段由 workflow 以纯文本方式读取，不会 source PKGBUILD。
 namcap_check=false
 pkgname=google-chrome
-pkgrel=1
+pkgrel=2
 
 _google_stable_meta() {
     local idx ver sha

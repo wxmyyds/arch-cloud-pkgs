@@ -20,7 +20,7 @@ pkgname=wechat
 # 预编译 AppImage 包含大量内置 ELF；namcap 扫描约 1 GB 产物会严重拖慢 CI。
 # 工作流默认执行 namcap，仅此包显式关闭；该字段由 workflow 以纯文本方式读取，不会 source PKGBUILD。
 namcap_check=false
-pkgrel=2
+pkgrel=3
 
 _wechat_latest() {
     local page ver
