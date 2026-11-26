@@ -1,7 +1,7 @@
 # CI 从 AUR 克隆并构建此包；此占位 PKGBUILD 仅供通用选包/质量检查读取。
 pkgname=libcava
 pkgver=0
-pkgrel=2
+pkgrel=3
 pkgdesc='Cava shared library used by Clavis Shell'
 arch=('x86_64')
 license=('MIT')

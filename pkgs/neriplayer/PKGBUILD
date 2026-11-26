@@ -3,18 +3,18 @@
 # 网易云 / QQ 音乐 / Bilibili / YouTube Music 多源在线播放）官方预编译 deb 重打包，
 # 内置私有 FFmpeg 解码库（usr/lib/NeriPlayer/ffmpeg/，dlopen 加载），零编译零依赖污染。
 #
-# 版本源：上游已正式发 Release（tag 形如 NeriPlayer-<sha7>.<MMDDHHMM>），每个
-# Release 挂 12 个资产，其中 NeriPlayer_<appver>_amd64.deb 是 Linux x64 安装包，
+# 版本源：上游 Release tag 为 NeriPlayer-<appver>（如 NeriPlayer-26.11.35970），
+# 其中 NeriPlayer_<appver>_amd64.deb 是 Linux x64 安装包，
 # 另有 SHA256SUMS.txt（含该 deb 的 SHA256）与 build-metadata.txt（含 build_epoch、
 # build_git_sha、release_tag）。本包取 releases/latest 的 tag，从同一 Release
 # 直接下载 deb 重打包，不再经过 nightly.link 的 artifact zip。
 #
 # 版本号 = 应用版本（deb 文件名）+ 构建 epoch（build-metadata.txt），pkgver 形如
-# 1.0.0.r1793179269，pacman 侧保持单调升级（.r<epoch> 数值递增）。
+# 26.11.35970.r1795620642，pacman 侧按应用版本与构建 epoch 升级。
 #
 # 升级方法：无需修改 pkgver；手动 workflow_dispatch 指定 neriplayer 即取当时最新 release。
-# 上游 app 版本长期为 1.0.0，靠 epoch 区分各次 release，因此每次上游发 Release
-# 都会产出一个更高的 pkgver。
+# 应用版本、Release tag、build-metadata 和 deb control 必须一致；保留构建 epoch
+# 区分同一应用版本的构建，避免把不同构建发布到同一包版本。
 #
 # 校验：deb 的 SHA256 直接取自该 Release 的 SHA256SUMS.txt，makepkg 落地即校验
 #      （早期走 artifact zip 时因无摘要只能 SKIP，现已可硬校验）；主许可证
@@ -64,8 +64,8 @@ _tag="$(_np_latest_tag)" || {
     echo >&2 "!! 无法解析 NeriPlayer 最新 release tag，网络或仓库结构可能已变化"
     exit 1
 }
-# tag 形态：NeriPlayer-<7 位 sha>.<MMDDHHMM>；不符即终止，避免把别的 tag 当版本
-[[ "$_tag" =~ ^NeriPlayer-[0-9a-f]{7}\.[0-9]{8}$ ]] || {
+# 当前 tag 直接使用三段数字应用版本；旧的 sha/时间标签不再接受。
+[[ "$_tag" =~ ^NeriPlayer-[0-9]+(\.[0-9]+){2}$ ]] || {
     echo >&2 "!! release tag 形态异常：${_tag:-（空）}"
     exit 1
 }
@@ -87,6 +87,7 @@ _deb_sha="$(awk '$2 ~ /_amd64\.deb$/ {print $1; exit}' <<<"$_sums" | tr -d '\r')
 _build_epoch="$(awk -F= '$1=="build_epoch" {print $2; exit}' <<<"$_meta" | tr -d '\r')"
 _build_sha="$(awk -F= '$1=="build_git_sha" {print $2; exit}' <<<"$_meta" | tr -d '\r')"
 _meta_tag="$(awk -F= '$1=="release_tag" {print $2; exit}' <<<"$_meta" | tr -d '\r')"
+_meta_app_ver="$(awk -F= '$1=="app_version" {print $2; exit}' <<<"$_meta" | tr -d '\r')"
 
 [[ -n "$_deb_name" ]] || {
     echo >&2 "!! SHA256SUMS.txt 中未找到 amd64 deb，上游资产命名可能已变化"
@@ -113,8 +114,12 @@ _meta_tag="$(awk -F= '$1=="release_tag" {print $2; exit}' <<<"$_meta" | tr -d '\
 # 应用版本取自 deb 资产名 NeriPlayer_<appver>_amd64.deb，与 control 由 prepare() 对账
 _app_ver="${_deb_name#NeriPlayer_}"
 _app_ver="${_app_ver%_amd64.deb}"
-[[ "$_app_ver" =~ ^[0-9]+(\.[0-9A-Za-z]+)*$ ]] || {
+[[ "$_app_ver" =~ ^[0-9]+(\.[0-9]+){2}$ ]] || {
     echo >&2 "!! 解析 deb 文件名版本失败：${_app_ver:-（空）}"
+    exit 1
+}
+[[ "$_tag" == "NeriPlayer-${_app_ver}" && "$_meta_app_ver" == "$_app_ver" ]] || {
+    echo >&2 "!! 应用版本不一致：tag=$_tag，deb=$_app_ver，metadata=${_meta_app_ver:-（空）}"
     exit 1
 }
 

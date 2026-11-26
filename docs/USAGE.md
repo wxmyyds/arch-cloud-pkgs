@@ -18,7 +18,6 @@
 
 ```sh
 cpkg -S clavis-shell
-cpkg -S cirrus
 cpkg -S clavis-shell=1.2.3-1
 cpkg -Syu
 ```
@@ -47,7 +46,7 @@ sudo pacman -U *.pkg.tar.zst
 
 ## 包特定说明
 
-- `cirrus` 的 x86_64 和 aarch64 Arch 包只由 CirrusMusic 上游 Release 构建，再经本仓库统一发布器上传；目录合并并成功发布后可用 `cpkg -S cirrus` 安装。本仓库不重编译 Cirrus。
+- Cirrus 尚未首发，当前未加入 cpkg 可安装目录。其 x86_64 和 aarch64 Arch 包将只由 CirrusMusic 上游 Release 构建，再经本仓库统一发布器上传；成功发布并确认可匿名拉取后才启用目录条目。本仓库不重编译 Cirrus。
 - `dux-files` 运行时依赖官方仓库的 `quickshell` 和 `qt6-declarative`；PDF 预览可选装 `qt6-webengine`。用户服务可用 `systemctl --user enable --now dfiles` 启用。
 - `wechat` 目前只提供 x86_64 包，由官方 AppImage 重打包；不需要 FUSE。
 - 客户端语言按 `LC_ALL`、`LC_MESSAGES`、`LANG` 顺序选择；简体中文 locale 显示中文，其他情况显示英文。

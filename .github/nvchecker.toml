@@ -34,7 +34,7 @@ url = "https://linux.weixin.qq.com/"
 encoding = "utf-8"
 regex = 'class="main-section__bd-version"[^>]*>([0-9]+(?:\.[0-9]+)+)</div>'
 
-# NeriPlayer：上游每次构建都发一个 Release，tag 形如 NeriPlayer-<sha7>.<MMDDHHMM>，
+# NeriPlayer：跟踪最新 Release，tag 为 NeriPlayer-<appver>（如 NeriPlayer-26.11.35970），
 # tag 本身就是变更信号（pkgver 另有 .r<build_epoch> 后缀，由 PKGBUILD 解析）
 [neriplayer]
 source = "github"

@@ -41,7 +41,7 @@
 - 版本 tag 已存在时，只有根 manifest/index 摘要完全相同才可幂等跳过；任何不同摘要（包括架构集合或元数据变化）都失败，必须抬版本或 pkgrel。
 - `PUBLISH=false` 完成全部包验证、leaf/index 生成和 SHA-256 计算，输出一行 JSON 验证报告后退出；不访问网络、不请求 token、不需要认证。仓库现有构建流程在不发布时也执行这个相同入口。
 
-Cirrus 的两个 Arch 包只在 `wxmyyds/CirrusMusic` 的 Release 中构建。本仓库仅收录 `cpkg/packages.json` 目录条目；不添加 `pkgs/cirrus/PKGBUILD`、nvchecker 条目或第二套发布工作流。Cirrus Release 用 `actions/checkout` 检出 `repository: wxmyyds/arch-cloud-pkgs`、`ref: main`、`path: build/cpkg-repository`，其 `packaging/linux/arch/cpkg/` 包装器把两个已构建的实际路径作为位置参数交给本发布器：
+Cirrus 的两个 Arch 包只在 `wxmyyds/CirrusMusic` 的 Release 中构建。本仓库提供统一发布器，当前暂不收录 Cirrus 的 `cpkg/packages.json` 目录条目；不添加 `pkgs/cirrus/PKGBUILD`、nvchecker 条目或第二套发布工作流。Cirrus Release 用 `actions/checkout` 检出 `repository: wxmyyds/arch-cloud-pkgs`、`ref: main`、`path: build/cpkg-repository`，其 `packaging/linux/arch/cpkg/` 包装器把两个已构建的实际路径作为位置参数交给本发布器：
 
 ```bash
 PACKAGE_NAME=cirrus PUBLISH=false \
@@ -49,7 +49,7 @@ PACKAGE_NAME=cirrus PUBLISH=false \
     "$x86_64_package" "$aarch64_package"
 ```
 
-上例在 Actions 中由调用方给两个变量赋实际包路径；`GITHUB_REPOSITORY` 保持调用方 CirrusMusic，生成目标为 `ghcr.io/wxmyyds/cirrus`。验证时保持 `PUBLISH=false`；正式 Release 才设为 `true` 并传入 job 的 `GITHUB_TOKEN`。若包装器提供 `cpkg_ref`，其默认必须为 `main`，仅 `publish=false` 时允许特性分支，限制由调用方 Release/包装器执行。目录 PR 合并且上游成功发布后，用户即可通过 `cpkg -S cirrus` 获取本机架构。
+上例在 Actions 中由调用方给两个变量赋实际包路径；`GITHUB_REPOSITORY` 保持调用方 CirrusMusic，生成目标为 `ghcr.io/wxmyyds/cirrus`。验证时保持 `PUBLISH=false`；正式 Release 才设为 `true` 并传入 job 的 `GITHUB_TOKEN`。若包装器提供 `cpkg_ref`，其默认必须为 `main`，仅 `publish=false` 时允许特性分支，限制由调用方 Release/包装器执行。先合入发布器，再由上游完成首次正式发布并确认 GHCR 可匿名拉取，最后单独添加 `cpkg/packages.json` 与包清单条目；届时用户才可通过 `cpkg -S cirrus` 获取本机架构。未首发的包不提前进入可安装目录，避免查询或升级检查失败。
 
 验证必须在 Actions 覆盖：两架构真实包的无凭据验证、单文件 manifest 与多文件 index 生成、版本编码、压缩/名称/版本/架构重复拒绝、客户端 index 选择及错误拒绝，以及包安装链路。Rust 格式化/测试/Clippy/编译和任何包构建均不在本机执行；该操作需要通过 GitHub Actions 执行。正式 GHCR 写入还需检验调用仓库 `GITHUB_TOKEN` 的包权限、同摘要重试与不同摘要拒绝，不能以本地静态检查代替。
 
