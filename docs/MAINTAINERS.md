@@ -23,7 +23,7 @@
 
 1. 本仓库负责构建的包在 `pkgs/<包名>/` 添加 `PKGBUILD`；需要构建缓存或额外依赖时添加 `build.conf`。上游已经构建并提供完整 Arch 包的外部生产者使用下方统一发布接口；Cirrus 仅走此接口，不新增重复的 PKGBUILD、构建或发布工作流。
 
-   AUR 包（`libcava`、`qt6-m3shapes-git`）由 `build-aur-package.sh` 现克隆 AUR 的 PKGBUILD 构建，仓库内的 `PKGBUILD` 仅为占位。若要重编并发布新产物（例如运行库 ABI/soname 变化），在 `pkgs/<包名>/pkgrel` 写入目标 pkgrel：脚本会把它覆盖到克隆出的 PKGBUILD 上。AUR 上游 pkgrel 恒为 1，不抬的话会命中已发布的不可变 OCI tag；摘要不同会使发布明确失败，相同摘要的重试才幂等跳过。发布后将新版本同步到 `.github/nvchecker/oldver.json` 的对应条目。
+   AUR 包（`libcava`、`qt6-m3shapes-git`）由 `build-aur-package.sh` 现克隆 AUR 的 PKGBUILD 构建，仓库内的 `PKGBUILD` 仅为占位。若要重编并发布新产物（例如运行库 ABI/soname 变化），在 `pkgs/<包名>/pkgrel` 写入目标 pkgrel：脚本先完成源码验证、提取、prepare 与 VCS pkgver 更新，再覆盖克隆出的 PKGBUILD，并用同一已准备的源码快照构建，最终检查产物 pkgrel 必须等于指定值。这样可避免动态 pkgver 变化把 override 重置回 1。AUR 上游 pkgrel 恒为 1，不抬的话会命中已发布的不可变 OCI tag；摘要不同会使发布明确失败，相同摘要的重试才幂等跳过。发布后将新版本同步到 `.github/nvchecker/oldver.json` 的对应条目。
 2. 更新 [PACKAGES.md](../PACKAGES.md)；若需通过 cpkg 发布，同时更新 [`cpkg/packages.json`](../cpkg/packages.json)。
 3. 若要启用自动上游检测，在 `.github/nvchecker.toml` 添加同名条目，并更新 `.github/nvchecker/oldver.json`。
 4. 推送后检查 Actions 构建、包元数据检查和发布状态。
