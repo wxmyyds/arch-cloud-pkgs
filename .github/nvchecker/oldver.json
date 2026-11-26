@@ -2,10 +2,10 @@
   "version": 2,
   "data": {
     "clavis-shell": {
-      "version": "20261112.103044",
-      "revision": "fc1d5fa70498a05334e185d923bcf79f156799a6",
-      "url": "https://github.com/wxmyyds/quickshell/commit/fc1d5fa70498a05334e185d923bcf79f156799a6",
-      "revision_creation_time": "2026-11-12T10:30:44Z"
+      "version": "20261126.003516",
+      "revision": "5a06b68e9cc02ad4ef0d379be249b73ebe6c5b91",
+      "url": "https://github.com/wxmyyds/quickshell/commit/5a06b68e9cc02ad4ef0d379be249b73ebe6c5b91",
+      "revision_creation_time": "2026-11-26T00:35:16Z"
     },
     "dux-files": {
       "version": "v2.1.2",
