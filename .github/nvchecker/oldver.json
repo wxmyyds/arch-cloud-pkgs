@@ -27,10 +27,10 @@
       "url": "https://aur.archlinux.org/packages/libcava"
     },
     "neriplayer": {
-      "version": "NeriPlayer-26.11.35970",
-      "gitref": "refs/tags/NeriPlayer-26.11.35970",
-      "url": "https://github.com/cwuom/NeriPlayer-Desktop/releases/tag/NeriPlayer-26.11.35970",
-      "creation_time": "2026-11-25T16:39:31Z"
+      "version": "NeriPlayer-26.11.38770",
+      "gitref": "refs/tags/NeriPlayer-26.11.38770",
+      "url": "https://github.com/cwuom/NeriPlayer-Desktop/releases/tag/NeriPlayer-26.11.38770",
+      "creation_time": "2026-11-27T14:38:27Z"
     },
     "qt6-m3shapes-git": {
       "version": "r38.6875533-1",
